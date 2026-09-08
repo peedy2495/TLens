@@ -62,6 +62,16 @@ describe("festival dataset", () => {
     );
     expect(defaultColumns(result)).not.toContain("Equipment");
   });
+  it("finds events through a nested person ID", () => {
+    const result = filterTables(tables, "", [
+      { column: "PersonID", value: "LOG-01", operator: "equals" },
+    ]);
+    const matchingEventIds = result
+      .flatMap((table) => table.rows)
+      .map((row) => row.EventID)
+      .filter(Boolean);
+    expect(matchingEventIds).toContain("SET-001");
+  });
   it("replaces an event filter and matches IDs exactly without changing other filters", () => {
     const filters = eventFilter(
       [

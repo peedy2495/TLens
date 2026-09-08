@@ -1,6 +1,6 @@
 import { co, z } from "jazz-tools";
 export const Workspace = co.map({ data: z.string() });
-export const TLensAccount = co
+export const DLensAccount = co
   .account({ profile: co.profile(), root: Workspace })
   .withMigration((account) => {
     if (!account.$jazz.has("root"))

@@ -1,3 +1,4 @@
+public/
 *.odg
 node_modules/
 dist/

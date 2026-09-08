@@ -8,6 +8,8 @@ import {
 import { JazzReactProvider, useAccount } from "jazz-tools/react";
 import { Dialog } from "@base-ui/react/dialog";
 import {
+  ArrowUpIcon,
+  ArrowDownIcon,
   ArrowDownTrayIcon,
   ArrowUpTrayIcon,
   ArrowPathIcon,
@@ -34,12 +36,18 @@ import {
   ArrowsUpDownIcon,
 } from "@heroicons/react/24/outline";
 import { parse } from "yaml";
+import { parseCsv, exportCsv, defaultCsvOptions, type CsvOptions } from "../lib/csv";
+import { parseXml } from "../lib/xml";
 import {
   eventFilter,
   defaultColumns,
+  filterColumns,
+  filterOptions,
   valueText,
   type Row,
   eventRange,
+  detectTimeColumns,
+  hasTimelineData,
   filterTables,
   isDate,
   localDate,
@@ -51,7 +59,7 @@ import {
   type View,
 } from "../lib/data";
 import { RecordTree } from "./RecordTree";
-import { TLensAccount } from "../lib/jazz";
+import { DLensAccount } from "../lib/jazz";
 
 const initialColumns = [
   "EventID",
@@ -82,25 +90,51 @@ function IconButton({
   );
 }
 function WorkspaceApp() {
-  const me = useAccount(TLensAccount, { resolve: { root: true } });
+  const me = useAccount(DLensAccount, { resolve: { root: true } });
   const [language, setLanguage] = useState<"de" | "en">(() =>
-    readStored("tlens-language", "de"),
+    readStored("dlens-language", "de"),
   );
   const t = (de: string, en: string) => (language === "de" ? de : en);
-  const [dark, setDark] = useState(() => readStored("tlens-dark", false));
+  const [dark, setDark] = useState(() => readStored("dlens-dark", false));
   const [files, setFiles] = useState<{ name: string; tables: Table[] }[]>([]);
   const [source, setSource] = useState("");
+  const timelineLoad = useRef<{ source: string; data: unknown } | null>(null);
+  const [sourceDragActive, setSourceDragActive] = useState(false);
+  const sourceDragDepth = useRef(0);
+  const [workspaceDragActive, setWorkspaceDragActive] = useState(false);
+  const workspaceDragDepth = useRef(0);
+  const [timeColumnsBySource, setTimeColumnsBySource] = useState<
+    Record<string, { start: string; end: string }>
+  >({});
   const [dbName, setDbName] = useState(() =>
-    readStored("tlens-db", "Festival Workspace"),
+    readStored("dlens-db", "Festival Workspace"),
   );
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<Filter[]>([]);
   const [columns, setColumns] = useState<string[]>(initialColumns);
   const [views, setViews] = useState<View[]>(() =>
-    readStored("tlens-views", []),
+    readStored("dlens-views", []),
   );
   const [panel, setPanel] = useState("");
   const [settings, setSettings] = useState(false);
+  const [csvOptions, setCsvOptions] = useState<CsvOptions>(() =>
+    ({ ...defaultCsvOptions, ...readStored("dlens-csv-options", {}) }),
+  );
+  useEffect(() => {
+    localStorage.setItem("dlens-csv-options", JSON.stringify(csvOptions));
+  }, [csvOptions]);
+  const [showTimeline, setShowTimeline] = useState<boolean>(() =>
+    readStored("dlens-show-timeline", true),
+  );
+  useEffect(() => {
+    localStorage.setItem("dlens-show-timeline", JSON.stringify(showTimeline));
+  }, [showTimeline]);
+  const [colorColumn, setColorColumn] = useState<string>(() =>
+    readStored("dlens-color-column", "Area"),
+  );
+  useEffect(() => {
+    localStorage.setItem("dlens-color-column", JSON.stringify(colorColumn));
+  }, [colorColumn]);
   const [detail, setDetail] = useState<{ row: Row; path: string[] } | null>(
     null,
   );
@@ -109,7 +143,9 @@ function WorkspaceApp() {
   const [viewName, setViewName] = useState("");
   const [withFilters, setWithFilters] = useState(true);
   const [selectedDate, setSelectedDate] = useState("");
-  const [sort, setSort] = useState({ column: "Start", direction: 1 });
+  const [tableSorts, setTableSorts] = useState<
+    Record<string, { column: string; direction: 1 | -1 } | null>
+  >({});
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [now, setNow] = useState(new Date());
@@ -121,17 +157,17 @@ function WorkspaceApp() {
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("tlens-dark", JSON.stringify(dark));
+    localStorage.setItem("dlens-dark", JSON.stringify(dark));
   }, [dark]);
   useEffect(() => {
     document.documentElement.lang = language;
-    localStorage.setItem("tlens-language", JSON.stringify(language));
+    localStorage.setItem("dlens-language", JSON.stringify(language));
   }, [language]);
   useEffect(() => {
-    localStorage.setItem("tlens-views", JSON.stringify(views));
+    localStorage.setItem("dlens-views", JSON.stringify(views));
   }, [views]);
   useEffect(() => {
-    localStorage.setItem("tlens-db", JSON.stringify(dbName));
+    localStorage.setItem("dlens-db", JSON.stringify(dbName));
   }, [dbName]);
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30000);
@@ -166,7 +202,34 @@ function WorkspaceApp() {
     new Set(
       tables.flatMap((table) => table.rows.flatMap((row) => Object.keys(row))),
     ),
+  ).sort((a, b) =>
+    b.localeCompare(a, language, { numeric: true, sensitivity: "base" }),
   );
+  const availableFilterColumns = filterColumns(tables).sort((a, b) =>
+    a.localeCompare(b, language, { numeric: true, sensitivity: "base" }),
+  );
+  const availableFilterValues = filterOptions(tables, filterColumn);
+  const timeColumns = timeColumnsBySource[source] ?? detectTimeColumns(allColumns);
+  const timelineSourceData = source === "jazz"
+    ? (me.$isLoaded ? me.root.data : undefined)
+    : files.find((file) => file.name === source)?.tables;
+  useEffect(() => {
+    if (!source || timelineSourceData === undefined) return;
+    if (timelineLoad.current?.source === source && timelineLoad.current.data === timelineSourceData) return;
+    timelineLoad.current = { source, data: timelineSourceData };
+    setShowTimeline(hasTimelineData(tables, timeColumns));
+  });
+  const rangeForRow = (row: Row) => eventRange(row, timeColumns.start, timeColumns.end);
+  function colorStyle(value: string) {
+    let hash = 0;
+    for (const character of value) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+    const hue = (hash * 137.508) % 360;
+    return {
+      backgroundColor: value ? `hsl(${hue} 45% ${dark ? 24 : 91}%)` : "var(--soft)",
+      color: value ? `hsl(${hue} 65% ${dark ? 82 : 27}%)` : "var(--muted)",
+      borderColor: value ? `hsl(${hue} 55% 55%)` : "var(--line)",
+    };
+  }
   const filtered = filterTables(tables, query, filters);
   const rows = filtered.flatMap((table) => table.rows);
   const dates = [
@@ -178,25 +241,17 @@ function WorkspaceApp() {
   const dayRows = rows.filter(
     (row) =>
       row.Date === day &&
-      Number.isFinite(eventRange(row).start) &&
-      Number.isFinite(eventRange(row).end),
+      Number.isFinite(rangeForRow(row).start) &&
+      Number.isFinite(rangeForRow(row).end),
   );
   const start = dayRows.length
-    ? Math.max(
-        0,
-        Math.floor(
-          Math.min(...dayRows.map((row) => eventRange(row).start)) / 60,
-        ) *
-          60 -
-          60,
-      )
+    ? Math.floor(Math.min(...dayRows.map((row) => rangeForRow(row).start)) / 60) * 60
     : 0;
   const end = dayRows.length
-    ? Math.ceil(Math.max(...dayRows.map((row) => eventRange(row).end)) / 60) *
-        60 +
-      60
+    ? Math.ceil(Math.max(...dayRows.map((row) => rangeForRow(row).end)) / 60) *
+        60
     : 1440;
-  const position = (minute: number) => ((minute - start) / (end - start)) * 100;
+  const position = (minute: number) => ((minute - start) / Math.max(1, end - start)) * 100;
   const clock = now.getHours() * 60 + now.getMinutes();
   const dateLabel = (value: string) =>
     value
@@ -207,8 +262,8 @@ function WorkspaceApp() {
         }).format(new Date(value + "T12:00:00"))
       : "—";
   function toggle(name: string) {
-    if (name === "filter" && !allColumns.includes(filterColumn)) {
-      setFilterColumn(allColumns[0] ?? "");
+    if (name === "filter" && !availableFilterColumns.includes(filterColumn)) {
+      setFilterColumn(availableFilterColumns[0] ?? "");
       setFilterValue("");
     }
     setPanel(panel === name ? "" : name);
@@ -222,13 +277,20 @@ function WorkspaceApp() {
   async function importFile(file: File | undefined) {
     if (!file) return;
     try {
+      if (!/\.(json|ya?ml|csv|xml)$/i.test(file.name))
+        throw new Error(t(
+          "Nicht unterstütztes Dateiformat. Erlaubt sind JSON, YAML, YML, CSV und XML.",
+          "Unsupported file format. Supported formats: JSON, YAML, YML, CSV and XML.",
+        ));
       if (file.size > 5_000_000)
         throw new Error(
           t("Maximal 5 MB pro Datei.", "Maximum file size is 5 MB."),
         );
       const content = await file.text();
-      const imported = toTables(
-        /\.json$/i.test(file.name) ? JSON.parse(content) : parse(content),
+      const imported = /\.xml$/i.test(file.name) ? parseXml(content) : toTables(
+        /\.csv$/i.test(file.name)
+          ? parseCsv(content, csvOptions)
+          : /\.json$/i.test(file.name) ? JSON.parse(content) : parse(content),
       );
       if (!imported.length)
         throw new Error(
@@ -242,6 +304,12 @@ function WorkspaceApp() {
         { name: file.name, tables: imported },
       ]);
       setSource(file.name);
+      setTimeColumnsBySource((previous) => ({
+        ...previous,
+        [file.name]: detectTimeColumns(
+          [...new Set(imported.flatMap((table) => table.rows.flatMap(Object.keys)))],
+        ),
+      }));
       setColumns(defaultColumns(imported));
       setFilters([]);
       setQuery("");
@@ -277,9 +345,22 @@ function WorkspaceApp() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "tlens-export.json";
+    a.download = "dlens-export.json";
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function downloadCsv(table: Table, visible: string[], sortedRows: Row[]) {
+    try {
+      const blob = new Blob([exportCsv(sortedRows, visible, csvOptions)], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${table.path.join("-").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_") || "table"}.csv`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
   }
   const count = tables.reduce((sum, table) => sum + table.rows.length, 0);
   return (
@@ -287,15 +368,15 @@ function WorkspaceApp() {
       <header className="topbar">
         <a className="brand" href="/">
           <span className="brand-mark">
-            T<span />
+            D<span />
           </span>
-          TLens
+          DLens
           <span className="brand-divider" />
-          <span className="workspace-label">Event Workspace</span>
+          <span className="workspace-label">Data Explorer</span>
         </a>
         <div className="top-right">
           <span className="prototype">{t("Prototyp", "Prototype")}</span>
-          <span className="avatar">EP</span>
+          <span className="avatar">DL</span>
         </div>
       </header>
       <main>
@@ -321,7 +402,32 @@ function WorkspaceApp() {
         >
           <div className="source-line">
             <button
-              className="source-button"
+              className={`source-button${sourceDragActive ? " drop-active" : ""}`}
+              onDragEnter={(event) => {
+                if (!event.dataTransfer.types.includes("Files")) return;
+                event.preventDefault();
+                sourceDragDepth.current++;
+                setSourceDragActive(true);
+              }}
+              onDragOver={(event) => {
+                if (!event.dataTransfer.types.includes("Files")) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDragLeave={() => {
+                sourceDragDepth.current = Math.max(0, sourceDragDepth.current - 1);
+                if (!sourceDragDepth.current) setSourceDragActive(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                sourceDragDepth.current = 0;
+                setSourceDragActive(false);
+                if (event.dataTransfer.files.length !== 1) {
+                  setNotice(t("Bitte genau eine Datei ablegen.", "Please drop exactly one file."));
+                  return;
+                }
+                void importFile(event.dataTransfer.files[0]);
+              }}
               onClick={() => toggle("sources")}
               aria-expanded={panel === "sources"}
             >
@@ -332,17 +438,21 @@ function WorkspaceApp() {
               )}
               <span>
                 <strong>
-                  {source === "jazz"
+                  {sourceDragActive
+                    ? t("Datei zum Importieren ablegen", "Drop file to import")
+                    : source === "jazz"
                     ? dbName
                     : source ||
                       t("Datenquelle auswählen", "Select data source")}
                 </strong>
                 <small>
-                  {source === "jazz"
+                  {sourceDragActive
+                    ? "JSON / YAML / CSV / XML"
+                    : source === "jazz"
                     ? "Jazz · Local-first"
                     : t(
-                        "Datei · Hierarchische Daten",
-                        "File · Hierarchical data",
+                        "Datei · Zum Importieren hier ablegen",
+                        "File · Drop here to import",
                       )}
                 </small>
               </span>
@@ -367,7 +477,7 @@ function WorkspaceApp() {
           <input
             ref={fileInput}
             type="file"
-            accept=".json,.yaml,.yml"
+            accept=".json,.yaml,.yml,.csv,.xml"
             hidden
             onChange={(event) => {
               void importFile(event.target.files?.[0]);
@@ -396,7 +506,7 @@ function WorkspaceApp() {
               <button onClick={() => fileInput.current?.click()}>
                 <PlusIcon />
                 {t("Datei importieren", "Import file")}
-                <small>JSON / YAML</small>
+                <small>JSON / YAML / CSV / XML</small>
               </button>
               <button onClick={() => void loadFestival()}>
                 <CalendarDaysIcon />
@@ -432,15 +542,13 @@ function WorkspaceApp() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            {query ? (
+            {query && (
               <IconButton
                 label={t("Suche löschen", "Clear search")}
                 onClick={() => setQuery("")}
               >
                 <XMarkIcon />
               </IconButton>
-            ) : (
-              <kbd>⌘ K</kbd>
             )}
           </div>
           <div className="toolbar">
@@ -504,9 +612,12 @@ function WorkspaceApp() {
                 {t("Spalte", "Column")}
                 <select
                   value={filterColumn}
-                  onChange={(e) => setFilterColumn(e.target.value)}
+                  onChange={(e) => {
+                    setFilterColumn(e.target.value);
+                    setFilterValue("");
+                  }}
                 >
-                  {allColumns.map((c) => (
+                  {availableFilterColumns.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>
@@ -519,14 +630,19 @@ function WorkspaceApp() {
                   type={
                     filterColumn === "Date"
                       ? "date"
-                      : ["Start", "End"].includes(filterColumn)
+                      : [timeColumns.start, timeColumns.end].includes(filterColumn)
                         ? "time"
                         : "text"
                   }
                   value={filterValue}
                   onChange={(e) => setFilterValue(e.target.value)}
-                  placeholder="Stage 1"
+                  list="filter-value-options"
                 />
+                <datalist id="filter-value-options">
+                  {availableFilterValues.map((value) => (
+                    <option key={value} value={value} />
+                  ))}
+                </datalist>
               </label>
               <button className="primary" type="submit">
                 <PlusIcon />
@@ -681,7 +797,7 @@ function WorkspaceApp() {
             {rows.length} {t("von", "of")} {count} {t("Einträgen", "entries")}
           </span>
         </div>
-        <section className="timeline-card">
+        {showTimeline && <section className="timeline-card">
           <div className="section-heading">
             <div>
               <span className="section-icon">
@@ -792,13 +908,14 @@ function WorkspaceApp() {
               </div>
               <div className="event-lanes">
                 {dayRows.map((row, index) => {
-                  const range = eventRange(row);
+                  const range = rangeForRow(row);
                   return (
                     <div className="event-lane" key={index}>
                       <button
-                        title={`${row.EventID} · ${row.Start}–${row.End} · ${row.Area}`}
-                        className={`event-bar ${row.Area === "Stage 2" ? "purple" : "green"}`}
+                        title={`${row.EventID} · ${row[timeColumns.start]}–${row[timeColumns.end]} · ${colorColumn}: ${valueText(row[colorColumn]) || "—"}`}
+                        className="event-bar colored-event"
                         style={{
+                          ...colorStyle(valueText(row[colorColumn])),
                           left: `${position(range.start)}%`,
                           width: `${position(range.end) - position(range.start)}%`,
                         }}
@@ -811,7 +928,7 @@ function WorkspaceApp() {
                       >
                         <span>{String(row.EventID ?? "Event")}</span>
                         <small>
-                          {String(row.Start)} – {String(row.End)}
+                          {String(row[timeColumns.start])} – {String(row[timeColumns.end])}
                         </small>
                       </button>
                     </div>
@@ -831,30 +948,33 @@ function WorkspaceApp() {
           ) : (
             <div className="timeline-empty">
               {t(
-                "Keine Events mit Datum und Uhrzeit in dieser Auswahl.",
-                "No events with date and time in this selection.",
+                !timeColumns.start || !timeColumns.end
+                  ? "Bitte Start- und Endzeit-Felder in den Einstellungen auswählen."
+                  : "Keine Events mit Datum und Uhrzeit in dieser Auswahl.",
+                !timeColumns.start || !timeColumns.end
+                  ? "Please select start and end time fields in Settings."
+                  : "No events with date and time in this selection.",
               )}
             </div>
           )}
           <div className="timeline-footer">
             <div>
-              <span className="legend">
-                <i />
-                Stage 1
-              </span>
-              <span className="legend">
-                <i className="purple-dot" />
-                Stage 2
-              </span>
+              {[...new Set(dayRows.map((row) => valueText(row[colorColumn])))].sort().map((value) => (
+                <span className="legend" key={value} style={{ color: colorStyle(value).color }}>
+                  <i style={{ background: "currentColor" }} />
+                  {colorColumn}: {value || t("Ohne Wert", "No value")}
+                </span>
+              ))}
             </div>
             <span>
               {t(
-                "Zeitraum automatisch · ± 1 Stunde",
-                "Automatic range · ± 1 hour",
+                "Zeitraum automatisch · Volle Stunden",
+                "Automatic range · Whole hours",
               )}
             </span>
           </div>
         </section>
+        }
         <div className="results-heading">
           <div>
             <Squares2X2Icon />
@@ -868,11 +988,17 @@ function WorkspaceApp() {
         </div>
         {filtered.map((table) => {
           const key = table.path.join("/");
+          const sortKey = JSON.stringify([source, table.path]);
+          const sort = tableSorts[sortKey];
+          const sortedRows = [...table.rows].sort((a, b) => sort
+            ? String(a[sort.column] ?? "").localeCompare(String(b[sort.column] ?? ""), language, { numeric: true }) * sort.direction
+            : 0);
           const visible = columns.filter((column) =>
             table.rows.some((row) => Object.hasOwn(row, column)),
           );
           return (
             <section className="data-card" key={key}>
+              <div className="table-header">
               <button
                 className="table-title"
                 onClick={() =>
@@ -903,6 +1029,16 @@ function WorkspaceApp() {
                   className={collapsed.includes(key) ? "rotated" : ""}
                 />
               </button>
+              <button
+                className="table-csv-export"
+                disabled={!visible.length}
+                aria-label={t("Tabelle als CSV exportieren: ", "Export table as CSV: ") + key}
+                onClick={() => downloadCsv(table, visible, sortedRows)}
+              >
+                <ArrowDownTrayIcon />
+                CSV
+              </button>
+              </div>
               {!collapsed.includes(key) && (
                 <div className="table-scroll">
                   {visible.length ? (
@@ -913,7 +1049,7 @@ function WorkspaceApp() {
                             <th
                               key={column}
                               aria-sort={
-                                sort.column === column
+                                sort?.column === column
                                   ? sort.direction === 1
                                     ? "ascending"
                                     : "descending"
@@ -922,32 +1058,37 @@ function WorkspaceApp() {
                             >
                               <button
                                 onClick={() =>
-                                  setSort({
-                                    column,
-                                    direction:
-                                      sort.column === column
-                                        ? -sort.direction
-                                        : 1,
+                                  setTableSorts((previous) => {
+                                    const current = previous[sortKey];
+                                    return {
+                                      ...previous,
+                                      [sortKey]:
+                                        current?.column === column
+                                          ? current.direction === 1
+                                            ? { column, direction: -1 }
+                                            : null
+                                          : { column, direction: 1 },
+                                    };
                                   })
                                 }
                               >
                                 {column}
-                                <ArrowsUpDownIcon />
+                                {sort?.column === column ? (
+                                  sort.direction === 1 ? (
+                                    <ArrowUpIcon className="active-sort-icon" />
+                                  ) : (
+                                    <ArrowDownIcon className="active-sort-icon" />
+                                  )
+                                ) : (
+                                  <ArrowsUpDownIcon />
+                                )}
                               </button>
                             </th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {[...table.rows]
-                          .sort(
-                            (a, b) =>
-                              String(a[sort.column] ?? "").localeCompare(
-                                String(b[sort.column] ?? ""),
-                                language,
-                                { numeric: true },
-                              ) * sort.direction,
-                          )
+                        {sortedRows
                           .map((row, index) => (
                             <tr
                               key={index}
@@ -980,21 +1121,20 @@ function WorkspaceApp() {
                             >
                               {visible.map((column) => (
                                 <td key={column}>
-                                  {column === "Area" ? (
+                                  {column === colorColumn ? (
                                     <span
-                                      className={`area-badge ${row[column] === "Stage 2" ? "purple" : "green"}`}
+                                      className="area-badge"
+                                      style={colorStyle(valueText(row[column]))}
                                     >
-                                      <i />
-                                      {valueText(row[column]) || "—"}
+                                      <i style={{ background: "currentColor" }} />
+                                      {column === "Date" && isDate(String(row[column]))
+                                        ? dateLabel(String(row[column]))
+                                        : valueText(row[column]) || "—"}
                                     </span>
                                   ) : column === "EventID" ? (
                                     <span className="event-id">
                                       <span
-                                        className={
-                                          row.Area === "Stage 2"
-                                            ? "purple-dot"
-                                            : ""
-                                        }
+                                        style={{ background: colorStyle(valueText(row[colorColumn])).color }}
                                       />
                                       {valueText(row[column]) || "—"}
                                     </span>
@@ -1024,10 +1164,40 @@ function WorkspaceApp() {
           );
         })}
         {!filtered.length && (
-          <div className="empty-state">
+          <div
+            className={`empty-state${workspaceDragActive ? " drop-active" : ""}`}
+            onDragEnter={(event) => {
+              if (source || !event.dataTransfer.types.includes("Files")) return;
+              event.preventDefault();
+              workspaceDragDepth.current++;
+              setWorkspaceDragActive(true);
+            }}
+            onDragOver={(event) => {
+              if (source || !event.dataTransfer.types.includes("Files")) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }}
+            onDragLeave={() => {
+              workspaceDragDepth.current = Math.max(0, workspaceDragDepth.current - 1);
+              if (!workspaceDragDepth.current) setWorkspaceDragActive(false);
+            }}
+            onDrop={(event) => {
+              if (source) return;
+              event.preventDefault();
+              workspaceDragDepth.current = 0;
+              setWorkspaceDragActive(false);
+              if (event.dataTransfer.files.length !== 1) {
+                setNotice(t("Bitte genau eine Datei ablegen.", "Please drop exactly one file."));
+                return;
+              }
+              void importFile(event.dataTransfer.files[0]);
+            }}
+          >
             <MagnifyingGlassIcon />
             <h2>
-              {source
+              {workspaceDragActive
+                ? t("Datei zum Importieren ablegen", "Drop file to import")
+                : source
                 ? t("Keine Treffer", "No matches")
                 : t("Dein Workspace ist leer", "Your workspace is empty")}
             </h2>
@@ -1035,10 +1205,10 @@ function WorkspaceApp() {
               {t(
                 source
                   ? "Passe deine Suche oder Filter an."
-                  : "Öffne eine Datei oder lade den Festival-Datensatz.",
+                  : "Ziehe eine JSON-, YAML-, CSV- oder XML-Datei hierher, öffne eine Datei oder lade den Festival-Datensatz.",
                 source
                   ? "Adjust your search or filters."
-                  : "Open a file or load the festival dataset.",
+                  : "Drop a JSON, YAML, CSV or XML file here, open a file or load the festival dataset.",
               )}
             </p>
             <button
@@ -1066,7 +1236,7 @@ function WorkspaceApp() {
         )}
         <footer>
           <span>
-            <span className="footer-logo">T</span>TLens{" "}
+            <span className="footer-logo">D</span>DLens{" "}
             <span className="subtle">
               · {t("Klarheit für deine Daten", "Clarity for your data")}
             </span>
@@ -1122,6 +1292,8 @@ function WorkspaceApp() {
                 "Your workspace, just how you need it.",
               )}
             </Dialog.Description>
+            <section className="settings-group" aria-labelledby="settings-general">
+            <h3 id="settings-general">{t("Allgemein", "General")}</h3>
             <label>
               {t("Sprache", "Language")}
               <select
@@ -1132,6 +1304,84 @@ function WorkspaceApp() {
                 <option value="en">English</option>
               </select>
             </label>
+            </section>
+            <section className="settings-group" aria-labelledby="settings-display">
+            <h3 id="settings-display">{t("Anzeige", "Display")}</h3>
+            <label className="timeline-toggle">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={showTimeline}
+                onChange={(event) => setShowTimeline(event.target.checked)}
+              />
+              {t("Zeitstrahl anzeigen", "Show timeline")}
+            </label>
+            {(["start", "end"] as const).map((kind) => (
+              <label key={kind}>
+                {kind === "start" ? t("Startzeit-Feld", "Start time field") : t("Endzeit-Feld", "End time field")}
+                <select
+                  value={timeColumns[kind]}
+                  disabled={!source}
+                  onChange={(event) => setTimeColumnsBySource((previous) => ({
+                    ...previous,
+                    [source]: { ...timeColumns, [kind]: event.target.value },
+                  }))}
+                >
+                  <option value="">{t("Bitte auswählen", "Please select")}</option>
+                  {[...allColumns].sort((a, b) => a.localeCompare(b, language, { numeric: true })).map((column) => (
+                    <option key={column} value={column}>{column}</option>
+                  ))}
+                </select>
+              </label>
+            ))}
+            <p className="subtle">
+              {t("Zeitfelder werden anhand üblicher Spaltennamen vorausgewählt. Die Zuordnung gilt für die aktuelle Quelle.", "Time fields are preselected using common column names. The mapping applies to the current source.")}
+            </p>
+            <label>
+              {t("Einfärbung nach", "Color by")}
+              <select value={colorColumn} onChange={(event) => setColorColumn(event.target.value)}>
+                {!allColumns.includes(colorColumn) && (
+                  <option value={colorColumn}>{colorColumn}</option>
+                )}
+                {[...allColumns].sort((a, b) => a.localeCompare(b, language, { numeric: true })).map((column) => (
+                  <option key={column} value={column}>{column}</option>
+                ))}
+              </select>
+            </label>
+            <p className="subtle">
+              {t(
+                "Gleiche Werte erhalten im Zeitstrahl und in der gewählten Tabellenspalte dieselbe Farbe.",
+                "Matching values share a color in the timeline and the selected table column.",
+              )}
+            </p>
+            </section>
+            <section className="settings-group" aria-labelledby="settings-sources">
+            <h3 id="settings-sources">{t("Datenquellen", "Data sources")}</h3>
+            <h4>{t("CSV-Format", "CSV format")}</h4>
+            <label>
+              {t("Trennzeichen", "Delimiter")}
+              <select value={csvOptions.delimiter} onChange={(event) => setCsvOptions((previous) => ({ ...previous, delimiter: event.target.value as CsvOptions["delimiter"] }))}>
+                <option value="auto">{t("Automatisch", "Automatic")}</option>
+                <option value=",">{t("Komma", "Comma")}</option>
+                <option value=";">{t("Semikolon", "Semicolon")}</option>
+                <option value={"\t"}>{t("Tabulator", "Tab")}</option>
+                <option value="|">{t("Senkrechter Strich |", "Pipe |")}</option>
+              </select>
+            </label>
+            <label>
+              {t("Textbegrenzungszeichen", "Quote character")}
+              <select value={csvOptions.quote} onChange={(event) => setCsvOptions((previous) => ({ ...previous, quote: event.target.value as CsvOptions["quote"] }))}>
+                <option value={'"'}>{t('Doppelte Anführungszeichen (")', 'Double quotes (")')}</option>
+                <option value="'">{t("Einfache Anführungszeichen (')", "Single quotes (')")}</option>
+                <option value="">{t("Keine", "None")}</option>
+              </select>
+            </label>
+            <label className="timeline-toggle">
+              <input type="checkbox" checked={csvOptions.header} onChange={(event) => setCsvOptions((previous) => ({ ...previous, header: event.target.checked }))} />
+              {t("Erste Zeile enthält Spaltennamen", "First row contains column names")}
+            </label>
+            <p className="subtle">{t("Gilt für CSV-Import und -Export. Automatisch verwendet beim Export Komma. Ohne Kopfzeile heißen importierte Spalten Column1, Column2 usw. Werte bleiben als Text erhalten.", "Applies to CSV import and export. Automatic uses commas for export. Without a header, imported columns are named Column1, Column2, etc. Values remain text.")}</p>
+            <button type="button" onClick={() => setCsvOptions({ ...defaultCsvOptions })}>{t("CSV-Defaults wiederherstellen", "Restore CSV defaults")}</button>
             <div className="settings-divider" />
             <h3>
               <CircleStackIcon />
@@ -1179,6 +1429,7 @@ function WorkspaceApp() {
                 "planned for a future version",
               )}
             </p>
+            </section>
             <Dialog.Close className="done-button">
               {t("Fertig", "Done")}
             </Dialog.Close>
@@ -1204,7 +1455,7 @@ const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/" });
 const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]) });
 export default function App() {
   return (
-    <JazzReactProvider AccountSchema={TLensAccount} sync={{ when: "never" }}>
+    <JazzReactProvider AccountSchema={DLensAccount} sync={{ when: "never" }}>
       <RouterProvider router={router} />
     </JazzReactProvider>
   );
