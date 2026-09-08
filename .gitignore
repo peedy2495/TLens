@@ -5,3 +5,7 @@ dist/
 .astro/
 .env
 .vercel/
+
+.cache/
+.dlens-cache/
+artifacts/

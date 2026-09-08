@@ -11,7 +11,6 @@ import {
   ArrowUpIcon,
   ArrowDownIcon,
   ArrowDownTrayIcon,
-  ArrowUpTrayIcon,
   ArrowPathIcon,
   BookmarkIcon,
   CalendarDaysIcon,
@@ -35,12 +34,9 @@ import {
   XMarkIcon,
   ArrowsUpDownIcon,
 } from "@heroicons/react/24/outline";
-import { parse } from "yaml";
-import { parseCsv, exportCsv, defaultCsvOptions, type CsvOptions } from "../lib/csv";
-import { parseXml } from "../lib/xml";
+import { exportCsv, defaultCsvOptions, type CsvOptions } from "../lib/csv";
 import {
   eventFilter,
-  defaultColumns,
   filterColumns,
   filterOptions,
   valueText,
@@ -53,13 +49,16 @@ import {
   localDate,
   nextDate,
   readStored,
-  toTables,
   type Filter,
   type Table,
   type View,
 } from "../lib/data";
+import { StoredRecordTree } from "./StoredRecordTree";
 import { RecordTree } from "./RecordTree";
 import { DLensAccount } from "../lib/jazz";
+import { StorageClient } from "../lib/storage/client";
+import { downloadStorage } from "../lib/storage/download";
+import { formatFor, type Dataset, type Query, type QueryResult, type Progress, type PageTable } from "../lib/ingestion/contracts";
 
 const initialColumns = [
   "EventID",
@@ -96,7 +95,21 @@ function WorkspaceApp() {
   );
   const t = (de: string, en: string) => (language === "de" ? de : en);
   const [dark, setDark] = useState(() => readStored("dlens-dark", false));
-  const [files, setFiles] = useState<{ name: string; tables: Table[] }[]>([]);
+  const [files, setFiles] = useState<Dataset[]>([]);
+  const storage = useRef<StorageClient | null>(null);
+  const [result, setResult] = useState<QueryResult | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [working, setWorking] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [remoteToken, setRemoteToken] = useState("");
+  const [storageStats, setStorageStats] = useState<{ databaseBytes: number; quota?: number; usage?: number; persisted: boolean } | null>(null);
+  const [storageReady, setStorageReady] = useState(false);
+  const [storageError, setStorageError] = useState("");
+  const [pages, setPages] = useState<Record<string, number>>({});
+  const [timelinePage, setTimelinePage] = useState(0);
+  const [pathPage, setPathPage] = useState(0);
+  const [valuePage, setValuePage] = useState(0);
   const [source, setSource] = useState("");
   const timelineLoad = useRef<{ source: string; data: unknown } | null>(null);
   const [sourceDragActive, setSourceDragActive] = useState(false);
@@ -135,7 +148,7 @@ function WorkspaceApp() {
   useEffect(() => {
     localStorage.setItem("dlens-color-column", JSON.stringify(colorColumn));
   }, [colorColumn]);
-  const [detail, setDetail] = useState<{ row: Row; path: string[] } | null>(
+  const [detail, setDetail] = useState<{ row: Row; path: string[]; dataset?: string; record?: number } | null>(
     null,
   );
   const [filterColumn, setFilterColumn] = useState("Area");
@@ -190,34 +203,47 @@ function WorkspaceApp() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-  let tables = files.find((file) => file.name === source)?.tables ?? [];
-  if (source === "jazz" && me.$isLoaded) {
-    try {
-      tables = JSON.parse(me.root.data);
-    } catch {
-      tables = [];
-    }
-  }
-  const allColumns = Array.from(
-    new Set(
-      tables.flatMap((table) => table.rows.flatMap((row) => Object.keys(row))),
-    ),
-  ).sort((a, b) =>
-    b.localeCompare(a, language, { numeric: true, sensitivity: "base" }),
-  );
-  const availableFilterColumns = filterColumns(tables).sort((a, b) =>
-    a.localeCompare(b, language, { numeric: true, sensitivity: "base" }),
-  );
-  const availableFilterValues = filterOptions(tables, filterColumn);
-  const timeColumns = timeColumnsBySource[source] ?? detectTimeColumns(allColumns);
-  const timelineSourceData = source === "jazz"
-    ? (me.$isLoaded ? me.root.data : undefined)
-    : files.find((file) => file.name === source)?.tables;
+  const selectedDataset = files.find((file) => file.id === source);
+  const legacyTables: Table[] = (() => {
+    if (source !== "jazz" || !me.$isLoaded) return [];
+    try { const value = JSON.parse(me.root.data); return Array.isArray(value) ? value : []; } catch { return []; }
+  })();
+  const tables: Table[] = selectedDataset ? result?.tables ?? [] : legacyTables;
+  const allColumns = (selectedDataset?.columns ?? Array.from(new Set(tables.flatMap((table) => table.rows.flatMap(Object.keys))))).slice().sort((a, b) => b.localeCompare(a, language, { numeric: true, sensitivity: "base" }));
+  const availableFilterColumns = (selectedDataset?.filterColumns ?? filterColumns(tables)).slice().sort((a, b) => a.localeCompare(b, language, { numeric: true, sensitivity: "base" }));
+  const availableFilterValues = selectedDataset ? result?.values ?? [] : filterOptions(tables, filterColumn);
+  const timeColumns = timeColumnsBySource[source] ?? selectedDataset?.mapping ?? detectTimeColumns(allColumns);
+  const timelineSourceData = selectedDataset?.generation ?? (source === "jazz" && me.$isLoaded ? me.root.data : undefined);
+  const queryRequest: Query = { dataset: source, query, filters, language, filterColumn, filterValue, day: selectedDate, today: localDate(now), mapping: timeColumns, colorColumn, sorts: tableSorts, pages, timelinePage, pathPage, valuePage };
+  useEffect(() => {
+    const client = new StorageClient(); storage.current = client;
+    client.request<Dataset[]>({ type: "list" }).then((datasets) => { setFiles(datasets); setStorageReady(true); }).catch((error) => setStorageError(String(error)));
+    return () => { client.close(); storage.current = null; };
+  }, []);
+  useEffect(() => {
+    if (settings && storageReady && storage.current) void storage.current.request<{ databaseBytes: number; quota?: number; usage?: number; persisted: boolean }>({ type: "storage" }).then(setStorageStats).catch(() => {});
+  }, [settings, storageReady]);
+  const queryKey = JSON.stringify(queryRequest);
+  useEffect(() => {
+    if (!selectedDataset || !storage.current) { setResult(null); return; }
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      storage.current!.request<QueryResult>({ type: "query", query: queryRequest }).then((data) => {
+        if (!cancelled) { setResult(data); setLoading(false); }
+      }).catch((error) => { if (!cancelled) { setNotice(String(error)); setLoading(false); } });
+    }, 150);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [queryKey, selectedDataset?.generation]);
+  useEffect(() => { setPages({}); setTimelinePage(0); setPathPage(0); }, [source, query, JSON.stringify(filters), JSON.stringify(tableSorts), selectedDate]);
+  useEffect(() => { setDetail(null); }, [source, selectedDataset?.generation]);
+  useEffect(() => { setValuePage(0); }, [filterColumn, filterValue]);
   useEffect(() => {
     if (!source || timelineSourceData === undefined) return;
     if (timelineLoad.current?.source === source && timelineLoad.current.data === timelineSourceData) return;
+    if (selectedDataset && !result) return;
     timelineLoad.current = { source, data: timelineSourceData };
-    setShowTimeline(hasTimelineData(tables, timeColumns));
+    setShowTimeline(selectedDataset ? result!.timeline : hasTimelineData(tables, timeColumns));
   });
   const rangeForRow = (row: Row) => eventRange(row, timeColumns.start, timeColumns.end);
   function colorStyle(value: string) {
@@ -230,27 +256,13 @@ function WorkspaceApp() {
       borderColor: value ? `hsl(${hue} 55% 55%)` : "var(--line)",
     };
   }
-  const filtered = filterTables(tables, query, filters);
+  const filtered = selectedDataset ? tables : filterTables(tables, query, filters);
   const rows = filtered.flatMap((table) => table.rows);
-  const dates = [
-    ...new Set(rows.map((row) => String(row.Date ?? "")).filter(isDate)),
-  ].sort();
-  const day = dates.includes(selectedDate)
-    ? selectedDate
-    : nextDate(dates, localDate(now));
-  const dayRows = rows.filter(
-    (row) =>
-      row.Date === day &&
-      Number.isFinite(rangeForRow(row).start) &&
-      Number.isFinite(rangeForRow(row).end),
-  );
-  const start = dayRows.length
-    ? Math.floor(Math.min(...dayRows.map((row) => rangeForRow(row).start)) / 60) * 60
-    : 0;
-  const end = dayRows.length
-    ? Math.ceil(Math.max(...dayRows.map((row) => rangeForRow(row).end)) / 60) *
-        60
-    : 1440;
+  const dates = selectedDataset ? result?.dates ?? [] : [...new Set(rows.map((row) => String(row.Date ?? "")).filter(isDate))].sort();
+  const day = selectedDataset ? result?.day ?? "" : dates.includes(selectedDate) ? selectedDate : nextDate(dates, localDate(now));
+  const dayRows = selectedDataset ? result?.dayRows ?? [] : rows.filter((row) => row.Date === day && Number.isFinite(rangeForRow(row).start) && Number.isFinite(rangeForRow(row).end));
+  const start = selectedDataset ? result?.start ?? 0 : dayRows.length ? Math.floor(Math.min(...dayRows.map((row) => rangeForRow(row).start)) / 60) * 60 : 0;
+  const end = selectedDataset ? result?.end ?? 1440 : dayRows.length ? Math.ceil(Math.max(...dayRows.map((row) => rangeForRow(row).end)) / 60) * 60 : 1440;
   const position = (minute: number) => ((minute - start) / Math.max(1, end - start)) * 100;
   const clock = now.getHours() * 60 + now.getMinutes();
   const dateLabel = (value: string) =>
@@ -275,49 +287,37 @@ function WorkspaceApp() {
     setPanel("");
   }
   async function importFile(file: File | undefined) {
-    if (!file) return;
+    if (!file || working) return;
     try {
-      if (!/\.(json|ya?ml|csv|xml)$/i.test(file.name))
-        throw new Error(t(
-          "Nicht unterstütztes Dateiformat. Erlaubt sind JSON, YAML, YML, CSV und XML.",
-          "Unsupported file format. Supported formats: JSON, YAML, YML, CSV and XML.",
-        ));
-      if (file.size > 5_000_000)
-        throw new Error(
-          t("Maximal 5 MB pro Datei.", "Maximum file size is 5 MB."),
-        );
-      const content = await file.text();
-      const imported = /\.xml$/i.test(file.name) ? parseXml(content) : toTables(
-        /\.csv$/i.test(file.name)
-          ? parseCsv(content, csvOptions)
-          : /\.json$/i.test(file.name) ? JSON.parse(content) : parse(content),
-      );
-      if (!imported.length)
-        throw new Error(
-          t(
-            "Keine Tabellen gefunden. Verwende Arrays mit Objekten.",
-            "No tables found. Use arrays of objects.",
-          ),
-        );
-      setFiles((prev) => [
-        ...prev.filter((f) => f.name !== file.name),
-        { name: file.name, tables: imported },
-      ]);
-      setSource(file.name);
-      setTimeColumnsBySource((previous) => ({
-        ...previous,
-        [file.name]: detectTimeColumns(
-          [...new Set(imported.flatMap((table) => table.rows.flatMap(Object.keys)))],
-        ),
-      }));
-      setColumns(defaultColumns(imported));
-      setFilters([]);
-      setQuery("");
-      setPanel("");
-      setNotice(t("Datei importiert", "File imported"));
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
-    }
+      formatFor(file);
+      if (!storage.current) throw new Error("Datenbank noch nicht bereit / Database not ready");
+      setWorking(true); setProgress({ phase: "reading", bytes: 0, total: file.size, records: 0 });
+      const dataset = await storage.current.request<Dataset>({ type: "import", file, csv: csvOptions, replace: files.find((f) => f.name === file.name && f.format !== "jazz")?.id }, { progress: setProgress });
+      setFiles((previous) => [...previous.filter((f) => f.id !== dataset.id), dataset]);
+      setResult(null); setSource(dataset.id);
+      setTimeColumnsBySource((previous) => ({ ...previous, [dataset.id]: dataset.mapping }));
+      setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setPanel("");
+      setNotice(t("Datei lokal gespeichert", "File stored locally"));
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setWorking(false); setProgress(null); }
+  }
+  async function importRemote() {
+    if (!storage.current || working) return;
+    try { setWorking(true); setProgress(null);
+      const dataset = await storage.current.request<Dataset>({ type: "remote", url: remoteUrl, token: remoteToken, name: "API · " + new URL(remoteUrl).hostname }, { progress: setProgress });
+      setFiles((previous) => [...previous, dataset]); setResult(null); setSource(dataset.id); setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setSettings(false);
+      setNotice(t("Remote-Daten lokal gespeichert", "Remote data stored locally"));
+    } catch (error) { setNotice(String(error)); } finally { setRemoteToken(""); setWorking(false); setProgress(null); }
+  }
+  async function migrateJazz() {
+    if (!me.$isLoaded || !storage.current || working) return;
+    try {
+      setWorking(true);
+      const dataset = await storage.current.request<Dataset>({ type: "jazz", data: me.root.data, account: me.$jazz.id, name: dbName });
+      setFiles((previous) => [...previous.filter((f) => f.id !== dataset.id), dataset]);
+      setResult(null); setSource(dataset.id); setColumns(dataset.scalarColumns); setFilters([]); setQuery("");
+      setNotice(t("Jazz-Daten in SQLite übernommen. Original bleibt erhalten.", "Jazz data migrated to SQLite. Original preserved."));
+    } catch (error) { setNotice(String(error)); } finally { setWorking(false); }
   }
   async function loadFestival() {
     try {
@@ -339,6 +339,9 @@ function WorkspaceApp() {
     }
   }
   function download() {
+    if (selectedDataset && storage.current) {
+      void runExport("json"); return;
+    }
     const blob = new Blob([JSON.stringify(filtered, null, 2)], {
       type: "application/json",
     });
@@ -349,7 +352,13 @@ function WorkspaceApp() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  async function runExport(format: "json" | "csv", path?: string[], columns?: string[]) {
+    if (!storage.current || working) return;
+    try { setWorking(true); await downloadStorage(storage.current, { type: "export", query: queryRequest, format, csv: csvOptions, path, columns }, `dlens-${format === "csv" ? (path?.join("-") ?? "table").replace(/[<>:"/\\|?*]/g, "_") : "export"}.${format}`); }
+    catch (error) { setNotice(String(error)); } finally { setWorking(false); }
+  }
   function downloadCsv(table: Table, visible: string[], sortedRows: Row[]) {
+    if (selectedDataset) { void runExport("csv", table.path, visible); return; }
     try {
       const blob = new Blob([exportCsv(sortedRows, visible, csvOptions)], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -362,7 +371,7 @@ function WorkspaceApp() {
       setNotice(error instanceof Error ? error.message : String(error));
     }
   }
-  const count = tables.reduce((sum, table) => sum + table.rows.length, 0);
+  const count = selectedDataset?.count ?? tables.reduce((sum, table) => sum + table.rows.length, 0);
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -431,7 +440,7 @@ function WorkspaceApp() {
               onClick={() => toggle("sources")}
               aria-expanded={panel === "sources"}
             >
-              {source === "jazz" ? (
+              {source === "jazz" || ["jazz", "api"].includes(selectedDataset?.format ?? "") ? (
                 <CircleStackIcon />
               ) : (
                 <DocumentChartBarIcon />
@@ -442,7 +451,7 @@ function WorkspaceApp() {
                     ? t("Datei zum Importieren ablegen", "Drop file to import")
                     : source === "jazz"
                     ? dbName
-                    : source ||
+                    : selectedDataset?.name || source ||
                       t("Datenquelle auswählen", "Select data source")}
                 </strong>
                 <small>
@@ -451,13 +460,13 @@ function WorkspaceApp() {
                     : source === "jazz"
                     ? "Jazz · Local-first"
                     : t(
-                        "Datei · Zum Importieren hier ablegen",
-                        "File · Drop here to import",
+                        "Datei · SQLite · Lokal gespeichert",
+                        "File · SQLite · Stored locally",
                       )}
                 </small>
               </span>
               <span className="source-count">
-                {tables.length} {t("Pfade", "paths")}
+                {selectedDataset?.paths ?? tables.length} {t("Pfade", "paths")}
               </span>
               <ChevronDownIcon />
             </button>
@@ -477,6 +486,7 @@ function WorkspaceApp() {
           <input
             ref={fileInput}
             type="file"
+            disabled={!storageReady || working}
             accept=".json,.yaml,.yml,.csv,.xml"
             hidden
             onChange={(event) => {
@@ -487,20 +497,20 @@ function WorkspaceApp() {
           {panel === "sources" && (
             <div className="inline-panel sources">
               <div className="panel-label">{t("DATEIEN", "FILES")}</div>
-              {files.map((file) => (
+              {files.filter((file) => !["jazz", "api"].includes(file.format)).map((file) => (
                 <button
-                  key={file.name}
+                  key={file.id}
                   onClick={() => {
-                    setSource(file.name);
+                    setResult(null); setSource(file.id);
                     setFilters([]);
                     setQuery("");
-                    setColumns(defaultColumns(file.tables));
+                    setColumns(file.scalarColumns);
                     setPanel("");
                   }}
                 >
                   <DocumentChartBarIcon />
                   {file.name}
-                  {source === file.name && <CheckIcon />}
+                  {source === file.id && <CheckIcon />}
                 </button>
               ))}
               <button onClick={() => fileInput.current?.click()}>
@@ -513,10 +523,11 @@ function WorkspaceApp() {
                 {t("Festival-Datensatz laden", "Load festival dataset")}
                 <small>16.–21.06.2027</small>
               </button>
-              <div className="panel-label">{t("DATENBANKEN", "DATABASES")}</div>
+              <div className="panel-label">{t("DATENBANKEN / API", "DATABASES / API")}</div>
+              {files.filter((file) => ["jazz", "api"].includes(file.format)).map((file) => <button key={file.id} onClick={() => { setResult(null); setSource(file.id); setColumns(file.scalarColumns); setFilters([]); setQuery(""); setPanel(""); }}><CircleStackIcon />{file.name}<small>SQLite · {t("lokale Kopie", "local copy")}</small>{source === file.id && <CheckIcon />}</button>)}
               <button
                 onClick={() => {
-                  setSource("jazz");
+                  setResult(null); setSource("jazz");
                   setColumns(initialColumns);
                   setFilters([]);
                   setQuery("");
@@ -528,11 +539,16 @@ function WorkspaceApp() {
                 <small>Jazz · {t("lokal", "local")}</small>
               </button>
               <p>
-                SQLite, MariaDB, PostgreSQL ·{" "}
-                {t("Anbindung folgt", "connection coming soon")}
+                MariaDB, PostgreSQL ·{" "}
+                {t("über Connector-Backend", "via connector backend")}
               </p>
             </div>
           )}
+          {storageError && <p role="alert">{storageError}</p>}
+          {working && <div className="import-progress" role="status">
+            {progress ? `${progress.phase === "reading" ? t("Einlesen", "Reading") : t("Aufbereiten", "Indexing")}: ${(progress.bytes / 1000000).toFixed(1)}${progress.total ? ` / ${(progress.total / 1000000).toFixed(1)}` : ""} MB · ${progress.records} ${t("Datensätze gespeichert", "records stored")}` : t("Verarbeitung läuft …", "Processing …")}
+            <button onClick={() => storage.current?.cancel()}>{t("Abbrechen", "Cancel")}</button>
+          </div>}
           <div className="search-box">
             <MagnifyingGlassIcon />
             <input
@@ -643,6 +659,11 @@ function WorkspaceApp() {
                     <option key={value} value={value} />
                   ))}
                 </datalist>
+                {selectedDataset && (valuePage > 0 || result?.moreValues) && <div className="data-pagination">
+                  <button type="button" disabled={!valuePage} onClick={() => setValuePage((p) => Math.max(0, p - 100))}>←</button>
+                  {t("Wertvorschläge", "Value suggestions")} {valuePage + 1}–{valuePage + availableFilterValues.length}
+                  <button type="button" disabled={!result?.moreValues} onClick={() => setValuePage((p) => p + availableFilterValues.length)}>→</button>
+                </div>}
               </label>
               <button className="primary" type="submit">
                 <PlusIcon />
@@ -794,7 +815,7 @@ function WorkspaceApp() {
             )}
           </div>
           <span>
-            {rows.length} {t("von", "of")} {count} {t("Einträgen", "entries")}
+            {selectedDataset ? result?.total ?? 0 : rows.length} {t("von", "of")} {count} {t("Einträgen", "entries")}
           </span>
         </div>
         {showTimeline && <section className="timeline-card">
@@ -804,7 +825,7 @@ function WorkspaceApp() {
                 <ClockIcon />
               </span>
               <h2>{t("Zeitstrahl", "Timeline")}</h2>
-              <span className="subtle">{dayRows.length} Events</span>
+              <span className="subtle">{selectedDataset ? result?.dayCount ?? 0 : dayRows.length} Events</span>
             </div>
             <span className="timeline-hint">
               {t("Dein Tag auf einen Blick", "Your day at a glance")}
@@ -959,7 +980,7 @@ function WorkspaceApp() {
           )}
           <div className="timeline-footer">
             <div>
-              {[...new Set(dayRows.map((row) => valueText(row[colorColumn])))].sort().map((value) => (
+              {(selectedDataset ? result?.legend ?? [] : [...new Set(dayRows.map((row) => valueText(row[colorColumn])))].sort()).map((value) => (
                 <span className="legend" key={value} style={{ color: colorStyle(value).color }}>
                   <i style={{ background: "currentColor" }} />
                   {colorColumn}: {value || t("Ohne Wert", "No value")}
@@ -975,11 +996,16 @@ function WorkspaceApp() {
           </div>
         </section>
         }
+        {selectedDataset && (result?.dayCount ?? 0) > 100 && showTimeline && <div className="data-pagination">
+          <button disabled={!timelinePage} onClick={() => setTimelinePage((p) => p - 1)}>←</button>
+          {t("Zeitstrahl-Seite", "Timeline page")} {timelinePage + 1}
+          <button disabled={(timelinePage + 1) * 100 >= (result?.dayCount ?? 0)} onClick={() => setTimelinePage((p) => p + 1)}>→</button>
+        </div>}
         <div className="results-heading">
           <div>
             <Squares2X2Icon />
             <h2>{t("Deine Daten", "Your data")}</h2>
-            <span className="number">{filtered.length}</span>
+            <span className="number">{selectedDataset ? result?.tableCount ?? 0 : filtered.length}</span>
           </div>
           <button className="text-button" onClick={download}>
             <ArrowDownTrayIcon />
@@ -990,11 +1016,11 @@ function WorkspaceApp() {
           const key = table.path.join("/");
           const sortKey = JSON.stringify([source, table.path]);
           const sort = tableSorts[sortKey];
-          const sortedRows = [...table.rows].sort((a, b) => sort
+          const sortedRows = selectedDataset ? table.rows : [...table.rows].sort((a, b) => sort
             ? String(a[sort.column] ?? "").localeCompare(String(b[sort.column] ?? ""), language, { numeric: true }) * sort.direction
             : 0);
           const visible = columns.filter((column) =>
-            table.rows.some((row) => Object.hasOwn(row, column)),
+            selectedDataset ? (table as PageTable).columns.includes(column) : table.rows.some((row) => Object.hasOwn(row, column)),
           );
           return (
             <section className="data-card" key={key}>
@@ -1023,7 +1049,7 @@ function WorkspaceApp() {
                   ))}
                 </div>
                 <span className="table-count">
-                  {table.rows.length} {t("Einträge", "entries")}
+                  {selectedDataset ? (table as PageTable).total : table.rows.length} {t("Einträge", "entries")}
                 </span>
                 <ChevronDownIcon
                   className={collapsed.includes(key) ? "rotated" : ""}
@@ -1039,6 +1065,11 @@ function WorkspaceApp() {
                 CSV
               </button>
               </div>
+              {selectedDataset && <div className="data-pagination">
+                <button disabled={!(table as PageTable).offset || loading} onClick={() => setPages((p) => ({ ...p, [JSON.stringify(table.path)]: Math.max(0, (table as PageTable).offset - 100) }))}>←</button>
+                {(table as PageTable).offset + 1}–{(table as PageTable).offset + table.rows.length} / {(table as PageTable).total}
+                <button disabled={(table as PageTable).offset + table.rows.length >= (table as PageTable).total || loading} onClick={() => setPages((p) => ({ ...p, [JSON.stringify(table.path)]: (table as PageTable).offset + table.rows.length }))}>→</button>
+              </div>}
               {!collapsed.includes(key) && (
                 <div className="table-scroll">
                   {visible.length ? (
@@ -1099,7 +1130,7 @@ function WorkspaceApp() {
                                 String(row.EventID ?? index + 1)
                               }
                               onClick={() => {
-                                setDetail({ row, path: table.path });
+                                setDetail({ row: selectedDataset ? { EventID: row.EventID ?? null } : row, path: table.path, dataset: selectedDataset?.id, record: selectedDataset ? (table as PageTable).ids[table.rows.indexOf(row)] : undefined });
                                 if (row.EventID != null)
                                   setFilters(
                                     eventFilter(filters, String(row.EventID)),
@@ -1111,7 +1142,7 @@ function WorkspaceApp() {
                                   event.key === " "
                                 ) {
                                   event.preventDefault();
-                                  setDetail({ row, path: table.path });
+                                  setDetail({ row: selectedDataset ? { EventID: row.EventID ?? null } : row, path: table.path, dataset: selectedDataset?.id, record: selectedDataset ? (table as PageTable).ids[table.rows.indexOf(row)] : undefined });
                                   if (row.EventID != null)
                                     setFilters(
                                       eventFilter(filters, String(row.EventID)),
@@ -1163,7 +1194,13 @@ function WorkspaceApp() {
             </section>
           );
         })}
-        {!filtered.length && (
+        {selectedDataset && (result?.tableCount ?? 0) > 20 && <div className="data-pagination">
+          <button disabled={!pathPage || loading} onClick={() => setPathPage((p) => p - 1)}>←</button>
+          {t("Tabellenseite", "Table page")} {pathPage + 1}
+          <button disabled={(pathPage + 1) * 20 >= (result?.tableCount ?? 0) || loading} onClick={() => setPathPage((p) => p + 1)}>→</button>
+        </div>}
+        {loading && <p role="status">{t("Daten werden abgefragt …", "Querying data …")}</p>}
+        {!loading && !filtered.length && (
           <div
             className={`empty-state${workspaceDragActive ? " drop-active" : ""}`}
             onDragEnter={(event) => {
@@ -1269,7 +1306,7 @@ function WorkspaceApp() {
               </Dialog.Close>
             </div>
             <Dialog.Description>{detail?.path.join(" › ")}</Dialog.Description>
-            {detail && <RecordTree value={detail.row} />}
+            {detail && (detail.dataset && detail.record !== undefined && storage.current ? <StoredRecordTree client={storage.current} dataset={detail.dataset} record={detail.record} language={language} /> : <RecordTree value={detail.row} />)}
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
@@ -1383,6 +1420,18 @@ function WorkspaceApp() {
             <p className="subtle">{t("Gilt für CSV-Import und -Export. Automatisch verwendet beim Export Komma. Ohne Kopfzeile heißen importierte Spalten Column1, Column2 usw. Werte bleiben als Text erhalten.", "Applies to CSV import and export. Automatic uses commas for export. Without a header, imported columns are named Column1, Column2, etc. Values remain text.")}</p>
             <button type="button" onClick={() => setCsvOptions({ ...defaultCsvOptions })}>{t("CSV-Defaults wiederherstellen", "Restore CSV defaults")}</button>
             <div className="settings-divider" />
+            <h3><CircleStackIcon />{t("API / Datenbank-Connector", "API / database connector")}</h3>
+            <p>{t("NDJSON-Endpunkt importieren. Datenbank-Zugangsdaten gehören ausschließlich ins separate Connector-Backend.", "Import an NDJSON endpoint. Database credentials belong only in the separate connector backend.")}</p>
+            <label>URL<input type="url" value={remoteUrl} onChange={(e) => setRemoteUrl(e.target.value)} placeholder="https://example.org/records?table=events" /></label>
+            <label>{t("Zugriffstoken (nur für diesen Import)", "Access token (only for this import)")}<input type="password" autoComplete="off" value={remoteToken} onChange={(e) => setRemoteToken(e.target.value)} /></label>
+            <button disabled={!remoteUrl || working} onClick={() => void importRemote()}>{t("Remote-Quelle importieren", "Import remote source")}</button>
+            <div className="settings-divider" />
+            <h3><CircleStackIcon />SQLite · OPFS</h3>
+            {storageStats && <p>{t("Datenbank", "Database")}: {(storageStats.databaseBytes / 2 ** 20).toFixed(1)} MiB · {t("Geschätzter freier Browserspeicher", "Estimated available browser storage")}: {storageStats.quota ? ((storageStats.quota - (storageStats.usage ?? 0)) / 2 ** 30).toFixed(1) + " GiB" : "—"} · {storageStats.persisted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Speicherung unterliegt Browserbereinigung", "Storage subject to browser eviction")}</p>}
+            <p>{t("Importierte Dateien bleiben lokal in diesem Browser gespeichert. Die Originaldatei wird nicht zusätzlich kopiert.", "Imported files persist locally in this browser. Original files are not duplicated.")}</p>
+            <button onClick={() => { void navigator.storage?.persist().then((granted) => setNotice(granted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Browser hat dauerhaften Speicher nicht gewährt", "Browser did not grant persistent storage"))); }}>{t("Dauerhaften Browserspeicher anfragen", "Request persistent browser storage")}</button>
+            {selectedDataset && <button onClick={async () => { if (!storage.current || working) return; try { setFiles(await storage.current.request<Dataset[]>({ type: "delete", dataset: source })); setSource(""); setResult(null); } catch (error) { setNotice(String(error)); } }}>{t("Ausgewählten SQLite-Datensatz löschen", "Delete selected SQLite dataset")}</button>}
+            <div className="settings-divider" />
             <h3>
               <CircleStackIcon />
               {t("Jazz-Datenquelle", "Jazz data source")}
@@ -1401,32 +1450,12 @@ function WorkspaceApp() {
                 "Jazz stores your data locally in this browser. Cross-device sync and sign-in are not configured in this prototype.",
               )}
             </div>
-            <button
-              className="primary"
-              disabled={!me.$isLoaded || source === "jazz" || !source}
-              onClick={() => {
-                if (me.$isLoaded) {
-                  me.root.$jazz.set("data", JSON.stringify(tables));
-                  setNotice(
-                    t(
-                      "Aktuelle Daten in Jazz gespeichert",
-                      "Current data saved to Jazz",
-                    ),
-                  );
-                }
-              }}
-            >
-              <ArrowUpTrayIcon />
-              {t(
-                "Aktuelle Quelle in Jazz übernehmen",
-                "Copy current source to Jazz",
-              )}
-            </button>
+            <button disabled={!me.$isLoaded || working} onClick={() => void migrateJazz()}>{t("Jazz-Bestand in SQLite übernehmen", "Migrate Jazz data to SQLite")}</button>
             <p className="subtle">
-              SQLite · MariaDB · PostgreSQL —{" "}
+              MariaDB · PostgreSQL —{" "}
               {t(
-                "für eine spätere Version vorgesehen",
-                "planned for a future version",
+                "über separates Connector-Backend verfügbar",
+                "available via separate connector backend",
               )}
             </p>
             </section>

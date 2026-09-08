@@ -1,0 +1,152 @@
+import puppeteer from "puppeteer-core";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import assert from "node:assert/strict";
+import { createConnectorServer } from "../server/connector.mjs";
+import { once } from "node:events";
+const root = resolve("artifacts/browser-check");
+await mkdir(root, { recursive: true });
+const origin = process.env.DLENS_TEST_URL ?? "http://127.0.0.1:4321";
+const connector = createConnectorServer({
+  token: "browser-test-token-00000000000000",
+  origin,
+  tables: ["events"],
+  readRows: async function* () {
+    yield { ID: "api-001", Person: { ID: "person1" } };
+    yield { ID: "api-002" };
+  },
+});
+connector.listen(0, "127.0.0.1");
+await once(connector, "listening");
+const endpoint = `http://127.0.0.1:${connector.address().port}/records?table=events`;
+assert.equal((await fetch(endpoint)).status, 401);
+assert.equal(
+  (
+    await fetch(endpoint, {
+      headers: {
+        Authorization: "Bearer browser-test-token-00000000000000",
+        Origin: "https://wrong.example",
+      },
+    })
+  ).status,
+  403,
+);
+assert.equal(
+  (
+    await fetch(endpoint.replace("table=events", "table=forbidden"), {
+      headers: { Authorization: "Bearer browser-test-token-00000000000000" },
+    })
+  ).status,
+  404,
+);
+const browser = await puppeteer.launch({
+  executablePath: "/usr/bin/google-chrome",
+  headless: true,
+  args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  userDataDir: root + "/profile",
+});
+try {
+  const page = await browser.newPage();
+  page.on("console", (m) => {
+    if (m.type() === "error") console.error("CONSOLE:", m.text());
+  });
+  page.on("pageerror", (e) => console.error("PAGE:", e.message));
+  await page.goto(process.env.DLENS_TEST_URL ?? "http://127.0.0.1:4321");
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  const name = `browser-${Date.now()}.xml`;
+  const fixture =
+    "<Events><Event><EventID>001</EventID><Date>2026-09-08</Date><Start>09:00</Start><End>10:00</End><People><Person><ID>p1</ID></Person></People></Event><Event><EventID>002</EventID><Date>2026-09-08</Date><Start>11:00</Start><End>12:00</End></Event></Events>";
+  await writeFile(root + "/" + name, fixture);
+  await (await page.$("input[type=file]")).uploadFile(root + "/" + name);
+  await page.waitForFunction(
+    () => document.body.textContent.includes("Datei lokal gespeichert"),
+    { timeout: 30000 },
+  );
+  await page.waitForFunction(
+    () => document.querySelectorAll("tbody tr").length === 2,
+  );
+  const text = await page.$eval("tbody", (el) => el.textContent);
+  assert.match(text, /001/);
+  assert.match(text, /002/);
+  await page.screenshot({ path: root + "/import.png", fullPage: true });
+  await page.click("tbody tr");
+  await page.waitForSelector(".record-tree details");
+  await page.click(".record-tree summary");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".record-tree details").length > 1,
+  );
+  await page.reload();
+  await page.waitForSelector(".source-button");
+  await page.click(".source-button");
+  await page.waitForFunction(
+    (name) =>
+      [...document.querySelectorAll(".sources button")].some((b) =>
+        b.textContent.includes(name),
+      ),
+    {},
+    name,
+  );
+  await page.evaluate(
+    (name) =>
+      [...document.querySelectorAll(".sources button")]
+        .find((b) => b.textContent.includes(name))
+        .click(),
+    name,
+  );
+  await page.waitForFunction(
+    () => document.querySelectorAll("tbody tr").length === 2,
+  );
+  const second = await browser.newPage();
+  await second.goto(process.env.DLENS_TEST_URL ?? "http://127.0.0.1:4321");
+  await second.waitForFunction(
+    () => document.body.textContent.includes("anderem Tab"),
+    { timeout: 30000 },
+  );
+  await second.close();
+  await writeFile(
+    root + "/cancel.xml",
+    "<Events>" +
+      "<Event><ID>cancel</ID><Text>" +
+      "x".repeat(20000000) +
+      "</Text></Event></Events>",
+  );
+  await (await page.$("input[type=file]")).uploadFile(root + "/cancel.xml");
+  await page.waitForSelector(".import-progress button");
+  const cancelStarted = Date.now();
+  await page.click(".import-progress button");
+  await page.waitForFunction(
+    () => !document.querySelector(".import-progress"),
+    { timeout: 10000 },
+  );
+  assert.ok(
+    Date.now() - cancelStarted < 2000,
+    "Cancellation must settle within two seconds",
+  );
+  assert.equal(await page.$$eval("tbody tr", (rows) => rows.length), 2);
+  await page.click('button[title="Einstellungen"]');
+  await page.waitForSelector("input[type=url]");
+  await page.type("input[type=url]", endpoint);
+  await page.type("input[type=password]", "browser-test-token-00000000000000");
+  await page.evaluate(() =>
+    [...document.querySelectorAll("button")]
+      .find((b) => b.textContent === "Remote-Quelle importieren")
+      .click(),
+  );
+  await page.waitForFunction(
+    () => document.body.textContent.includes("Remote-Daten lokal gespeichert"),
+    { timeout: 30000 },
+  );
+  await page.waitForFunction(() =>
+    document.querySelector("tbody")?.textContent.includes("api-001"),
+  );
+  console.log(
+    "PASS: UI XML import, OPFS reload, source selection, exclusive tab ownership, cancellation, authenticated HTTP connector and backend access controls",
+  );
+} catch (error) {
+  for (const page of await browser.pages())
+    console.error(await page.evaluate(() => document.body.innerText));
+  throw error;
+} finally {
+  await browser.close();
+  connector.close();
+}

@@ -7,18 +7,27 @@
     "dev": "astro dev --host 0.0.0.0",
     "build": "astro check && astro build",
     "preview": "astro preview --host 0.0.0.0",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "node scripts/check-storage-browser.mjs",
+    "test:large": "node scripts/benchmark-storage.mjs",
+    "connector": "node server/connector.mjs"
   },
   "dependencies": {
     "@astrojs/react": "^4.4.2",
     "@base-ui/react": "^1.1.0",
     "@heroicons/react": "^2.2.0",
+    "@sqlite.org/sqlite-wasm": "^3.53.4-build1",
+    "@streamparser/json": "^0.0.26",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-router": "^1.157.7",
     "astro": "^5.16.15",
     "jazz-tools": "^0.20.19",
+    "mysql2": "^3.24.4",
+    "pg": "^8.23.0",
+    "pg-query-stream": "^4.17.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "saxes": "^6.0.0",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.2"
   },
@@ -27,7 +36,12 @@
     "@types/node": "^22.20.1",
     "@types/react": "^19.2.9",
     "@types/react-dom": "^19.2.3",
+    "node": "^22.23.2",
+    "puppeteer-core": "^24.43.1",
     "typescript": "~5.9.3",
     "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }

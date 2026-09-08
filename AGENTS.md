@@ -9,20 +9,22 @@ A tool for filtering and displaying hierarchical data structures as well as rela
 
 ## Documentation and development workflow
 
+- The SQLite WASM/OPFS migration is implemented for local files and HTTP NDJSON. Read `docs/data-architecture-migration.md`, `docs/data-architecture-decisions.md` and `docs/data-architecture-validation.md` for implementation status, limits and remaining integration gates. Follow `.agents/skills/data-ingestion-architecture/SKILL.md`; preserve existing Jazz data and product semantics. Keep README and these requirements aligned.
+
 - Maintain both `README.md` and `AGENTS.md` alongside future feature, behavior, configuration and workflow changes. README describes usage and current implementation; AGENTS records requirements and development guidance.
 - Preserve existing requirements when reorganizing documentation. Distinguish implemented behavior from planned capabilities.
 - Inspect the implementation and, where needed, commit history to resolve unclear behavior.
 - Code comments must be in English. Use only royalty-free elements.
-- Use Node.js 22. Run relevant tests with `npm test` and verify application changes with `npm run build` as appropriate.
+- Use Node.js 22. Run relevant tests with `npm test` and application checks with `npm run build`. Browser/OPFS checks use `npm run test:browser`; large-file measurements use `npm run test:large`. Exclude generated `artifacts/` and Vite caches from TypeScript and version control. Keep server credentials only in backend environment variables. The optional backend is deployed separately from the static app.
 
 ## Data sources and import
 
 - Provide a data source selector. The app starts without a selected source or automatically loaded demo data.
 - The empty workspace is also a file drop target when no source is selected. Highlight it during file drags and reuse the same import validation and single-file restriction as the source selector. The filtered "No matches" state is not a drop target.
 - Support dragging a single file onto the source selector, with a highlighted drop target. Share file-extension validation between drag-and-drop and the file picker: accept only JSON, YAML/YML, CSV and XML (case-insensitive), and show a localized notice for unsupported formats before reading them. Reject multi-file drops with a clear notice; preserve the current source on rejected imports.
-- Supported file imports: YAML, JSON, CSV and XML, up to 5 MB per file. Imported files remain available for the session.
-- XML uses the browser's XML parser. Repeated sibling elements form table rows; plain collection wrappers are traversed, and single records are supported. Preserve nested elements, names and text values; prefix attributes with `@` and store direct mixed text/CDATA under `#text`. Reject malformed XML and DTD declarations. This is a data-oriented conversion, not a lossless XML document editor (mixed-content ordering, comments and processing instructions are not retained).
-- Jazz is the current local database implementation. SQLite, MariaDB and PostgreSQL remain required target data sources, but their adapters are not yet connected.
+- Supported file imports: YAML, JSON, CSV and XML. XML/CSV/JSON use bounded streaming in a worker; YAML remains limited to 5,000,000 bytes. File imports now persist in SQLite/OPFS across sessions, replacing the old session-only behavior. Never duplicate original large files automatically. Enforce the documented per-value, depth, record and page limits with explicit errors.
+- XML uses a strict streaming SAX parser; the old DOM parser is retained only as a compatibility reference. Repeated sibling elements form table rows; plain collection wrappers are traversed, and single records are supported. Preserve nested elements, names and text values; prefix attributes with `@` and store direct mixed text/CDATA under `#text`. Reject malformed XML and DTD declarations. This is a data-oriented conversion, not a lossless XML document editor (mixed-content ordering, comments and processing instructions are not retained).
+- SQLite WASM with OPFS SAHPool is the primary local database. One worker owns the database via Web Locks; report unavailable storage or a competing tab without a silent memory fallback. Jazz remains a read-only legacy source. The optional server connector implements PostgreSQL and MariaDB/MySQL streaming adapters; isolated PostgreSQL 16 and MariaDB 11 integration tests passed. HTTP NDJSON uses the shared connector/ingestion contract.
 - Show files with the mockup's file icon and database connections with the database icon.
 - Database names are configurable in settings and appear under databases in the source selector.
 - JSON/YAML arrays of objects become separate tables per data path. Preserve nested objects and arrays.
@@ -48,12 +50,12 @@ A tool for filtering and displaying hierarchical data structures as well as rela
 
 ## Tables and saved views
 
-- Display a separate table for each data path or source table.
+- Display a separate logical table for each data path or source table. Load bounded pages and show full-result counts; pagination must not change search, visible-column discovery, source order or export semantics.
 - Allow selection of variable names/columns to display. Initially select scalar columns.
 - Omit selected columns from a table when they do not exist in its filtered records.
 - Sort each table independently, scoped by source and data path. Clicking a column cycles ascending → descending → unsorted; unsorted is the initial state and restores source order.
 - Show an orange (`#f97316`) upward/downward arrow for active sorting; use the neutral sort symbol when inactive.
-- Open the full record as an expandable hierarchy on row click or Enter/Space, regardless of visible columns.
+- Open the full record as an expandable hierarchy on row click or Enter/Space, regardless of visible columns. SQLite details load one level at a time with paginated children.
 - Save the current display selection as a reusable view, optionally including current filters and search text. Allow a view to be the default.
 
 ## Timeline and field mapping
@@ -80,7 +82,7 @@ Group settings into these sections:
 
 - **Allgemein / General:** language selection, currently German and English.
 - **Anzeige / Display:** timeline visibility, start/end field mappings and color-field selection.
-- **Datenquellen / Data sources:** CSV format settings and Jazz configuration, including database name and copying the current source into Jazz; indicate future database adapters.
+- **Datenquellen / Data sources:** CSV format, HTTP connector, SQLite storage/quota/persistence status, dataset removal and Jazz configuration. Explicit, idempotent Jazz-to-SQLite migration replaces the former copy-to-Jazz action; preserve the original Jazz account/data. Do not store database passwords or API tokens in preferences or import metadata.
 
 ## Design
 
@@ -92,9 +94,9 @@ Group settings into these sections:
 ## Technology and deployment
 
 - Vite, Astro 5, React 19, TanStack Router and Tailwind CSS 4.
-- Jazz sync database; reference: https://github.com/carlassmann/alkalye, using Jazz for local-first sync and encryption.
+- Legacy Jazz integration; reference: https://github.com/carlassmann/alkalye, using Jazz for local-first sync and encryption.
 - Retain the shadcn/ui (base-lyra style) design target. Current implementation uses custom rounded components and Base UI Dialog; a full shadcn/base-lyra component set is not installed.
-- Current Jazz prototype uses an anonymous local account without network sync. Data copied into Jazz persists locally; authentication and cross-device sync remain future work. New accounts start empty.
+- The legacy Jazz account remains anonymous and local without network sync. Existing data persists unchanged; authentication and cross-device sync remain future work. New accounts start empty. SQLite import activation and migration fingerprints must commit atomically; failures, cancellation and crash recovery must preserve the previous active generation.
 - Host the demo on Vercel via GitHub import: Astro, build `npm run build`, output `dist`. Deployment configuration is present; do not describe deployment as completed unless verified.
 
 ## Festival demo data

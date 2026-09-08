@@ -4,7 +4,11 @@ Data Explorer für hierarchische und tabellarische Daten, gestaltet nach `Mokup.
 
 Das Tool heißt DLens. Vorhandene Einstellungen unter den bisherigen `tlens-`-Schlüsseln werden weiter eingelesen, solange noch kein entsprechender `dlens-`-Wert existiert. Jazz-Daten bleiben erhalten. Der bestehende Projektordner und historische Mockups werden nicht umbenannt.
 
-## Starten
+## Datenarchitektur
+
+Der lokale Datenpfad verwendet jetzt SQLite WASM mit OPFS in einem Web Worker. XML, CSV und JSON werden inkrementell eingelesen; YAML bleibt auf 5 MB begrenzt. Tabellen, rekursive Suche und Filter laufen über Repositories, die Oberfläche lädt Seiten und Details bedarfsgerecht. [Architekturentscheidungen und Grenzen](docs/data-architecture-decisions.md), [Migrationsstand](docs/data-architecture-migration.md) und [Prüfprotokoll](docs/data-architecture-validation.md) beschreiben Umsetzung und verbleibende Freigaben.
+
+## Entwicklung starten
 
 Node.js 22 verwenden.
 
@@ -23,7 +27,7 @@ npm run preview
 
 ## Funktionen
 
-- JSON-/YAML-/CSV-/XML-Import (bis 5 MB), getrennte Tabellen je verschachteltem Array
+- Streaming-Import von JSON, CSV und XML; XML mit einer echten 2,2-GB-Datei geprüft. YAML bis 5 MB. Tabellen je Datenpfad; verschachtelte Werte bleiben erhalten.
 - XML: wiederholte Elemente werden Tabellenzeilen, einfache Sammlungscontainer werden durchlaufen; auch einzelne Datensätze sind möglich. Verschachtelte Elemente bleiben erhalten, Attribute erhalten das Präfix `@`, direkter Text bei gemischten Inhalten den Schlüssel `#text`. Werte bleiben Text. Ungültiges XML und DTDs werden abgewiesen. Die Umwandlung dient der Datenanzeige; Kommentare, Verarbeitungsanweisungen und die Reihenfolge gemischter Text-/Elementinhalte werden nicht bewahrt.
 - CSV-Defaults: erste Zeile als eindeutige Spaltenüberschriften; Komma, Semikolon oder Tabulator werden automatisch erkannt. Werte bleiben als Text erhalten, einschließlich führender Nullen. Anführungszeichen und mehrzeilige Felder werden unterstützt. Unter Einstellungen → Datenquellen sind Trennzeichen (auch Pipe), Textbegrenzungszeichen und Kopfzeile konfigurierbar; ohne Kopfzeile entstehen Column1, Column2 usw. Einstellungen gelten ab dem nächsten Import und lassen sich zurücksetzen.
 - Suche über alle Werte, kombinierbare Spaltenfilter, Sortierung und Spaltenauswahl
@@ -32,7 +36,7 @@ npm run preview
 - Deutsche/englische Oberfläche, Hell-/Dunkelmodus, responsive Darstellung
 - Export der gefilterten Tabellen als JSON
 - CSV-Export über den CSV-Button jeder Tabelle: gefilterte Zeilen, sichtbare Spalten und aktuelle Sortierung. Ohne sichtbare Spalten ist der Export deaktiviert. Verschachtelte Zellwerte werden als JSON-Text exportiert. Die CSV-Einstellungen gelten auch beim Export; „Automatisch“ verwendet Komma. Dateien enthalten UTF-8 BOM und CRLF-Zeilenenden. Sind Textbegrenzungszeichen deaktiviert, erfordern Werte mit Trennzeichen oder Zeilenumbrüchen deren Aktivierung.
-- Echter lokaler Jazz-Speicher: In Einstellungen aktuelle Datei übernehmen, anschließend unter Datenbanken auswählen
+- Lokaler SQLite-/OPFS-Speicher mit Fortschritt, Abbruch und atomarem Reimport. Bestehende Jazz-Daten bleiben lesbar und können über die Einstellungen idempotent nach SQLite übernommen werden.
 
 ## Bedienung und Einstellungen
 
@@ -49,13 +53,33 @@ Eine Datei lässt sich direkt auf die Datenquellenauswahl ziehen; das Ziel wird 
 - Das kompakte Suchfeld-Löschsymbol erscheint nur bei vorhandener Eingabe. Bei leerer Suche wird kein Ersatzsymbol angezeigt.
 - **Allgemein:** Sprache.
 - **Anzeige:** Zeitstrahl ein/aus (Default an), Start-/Endzeit-Felder und Einfärbung nach einer gewählten Spalte (Default Area). Gleiche Werte erhalten im Zeitstrahl und in der sichtbaren gewählten Spalte dieselbe Farbe. Die Legende folgt dem angezeigten Tag; fehlende Werte bleiben neutral.
-- **Datenquellen:** CSV-Format und Jazz-Konfiguration.
+- **Datenquellen:** CSV-Format, NDJSON-API-/Datenbank-Connector, SQLite-Speicherstatus und Jazz-Übernahme.
 
 CSV-Format, Zeitstrahl-Sichtbarkeit und Farbspalte werden im Browser gespeichert. Zeitfeld-Zuordnungen gelten pro Quelle und bleiben beim Wechsel zwischen geladenen Quellen erhalten; beim erneuten Dateiimport wird neu erkannt.
 
 Bei künftigen Änderungen werden README.md (Bedienung und Implementierungsstand) und AGENTS.md (Anforderungen und Entwicklungsregeln) gemeinsam gepflegt.
 
-Die App startet ohne ausgewählte Datenquelle und ohne automatisch geladene Demo-Daten. Neue Jazz-Konten werden leer angelegt. Bereits gespeicherte Jazz-Daten bleiben erhalten und werden nur nach expliziter Quellenauswahl angezeigt. Dateiimporte bleiben für die Sitzung verfügbar. Ansichten, Sprache und Theme werden im Browser gespeichert. In Jazz übernommene Daten bleiben über IndexedDB erhalten. Der Prototyp nutzt ein anonymes lokales Jazz-Konto ohne Netzwerk-Sync; Anmeldung, Gerätewechsel und produktive Sync-Konfiguration sind noch offen. SQLite, MariaDB und PostgreSQL sind gekennzeichnete zukünftige Adapter und noch nicht angeschlossen. Datenbankzugangsdaten dürfen später ausschließlich serverseitig verarbeitet werden.
+Die App startet ohne ausgewählte Datenquelle und ohne automatisch geladene Demo-Daten. Neue Dateiimporte bleiben jetzt über Sitzungen hinweg in SQLite verfügbar; diese Änderung ersetzt die frühere Sitzungsaufbewahrung. Ein erneuter Import desselben Dateinamens aktiviert den neuen Stand erst nach vollständigem Erfolg. Fehler oder Abbruch erhalten den bisherigen Stand. Originaldateien werden nicht zusätzlich kopiert. Ein ausgewählter SQLite-Datensatz lässt sich in den Einstellungen löschen.
+
+OPFS und Web Locks müssen im Browser verfügbar sein. Ein zentraler Worker hält die Datenbank exklusiv; ein zweiter Tab zeigt eine Sperrmeldung. Ohne OPFS erfolgt kein stiller Wechsel zu flüchtigem Speicher. Der Browser entscheidet über Speicherquota und die Gewährung dauerhafter Speicherung; die Einstellungen zeigen den Status und erlauben eine Persistenzanfrage.
+
+Bestehende Jazz-Daten bleiben unangetastet und können weiterhin explizit ausgewählt werden. „Jazz-Bestand in SQLite übernehmen“ ersetzt den früheren Schreibweg nach Jazz. Wiederholte Übernahmen desselben Kontostands erzeugen keine Duplikate. Das anonyme lokale Jazz-Konto erhält keinen Netzwerk-Sync; Anmeldung und geräteübergreifende Synchronisierung bleiben offen. Ansichten und kleine UI-Einstellungen bleiben mit `tlens-`-Fallback im Browser.
+
+Tabellen laden bis zu 100 Zeilen und zeigen Gesamtzahlen sowie Navigation; bis zu 20 Tabellen erscheinen pro Seite. Große Detailbäume laden ihre Kinder beim Öffnen. Timeline und Wertvorschläge sind ebenfalls seitenweise zugänglich. Die CSV-Ausgabe enthält weiterhin alle gefilterten Zeilen der gewählten Tabelle, nicht nur die aktuelle Seite. Große Exporte schreiben inkrementell in den Dateispeicherdialog; ohne diese Browser-API gilt eine Exportgrenze von 20 MiB. Einzelwerte, Tiefe und projizierte Zeilen haben explizite [Ressourcengrenzen](docs/data-architecture-decisions.md).
+
+## API- und Datenbankquellen
+
+Unter Einstellungen → Datenquellen kann ein HTTPS-NDJSON-Endpunkt importiert werden; HTTP ist ausschließlich für localhost erlaubt. Ein optionales Zugriffstoken gilt nur für den laufenden Import und wird nicht gespeichert. Datei- und HTTP-Connector verwenden denselben Importservice. Datenbankpasswörter gehören ausschließlich ins separate Backend.
+
+`npm run connector` startet das optionale Node.js-Backend für PostgreSQL oder MariaDB/MySQL. Es benötigt serverseitig:
+
+- `DLENS_CONNECTOR_DATABASE_URL`: PostgreSQL- oder `mysql://`-Verbindungs-URL mit einem reinen Lesekonto.
+- `DLENS_CONNECTOR_TOKEN`: Zugriffstoken mit mindestens 24 Zeichen.
+- `DLENS_CONNECTOR_ORIGIN`: exakt erlaubte DLens-Origin, beispielsweise `http://localhost:4321`.
+- `DLENS_CONNECTOR_TABLES`: freigegebene Tabellen, kommasepariert; optional `schema.table`.
+- Optional `DLENS_CONNECTOR_HOST` (Default `127.0.0.1`) und `DLENS_CONNECTOR_PORT` (Default `8787`).
+
+`GET /schema` liefert die freigegebenen Tabellennamen; `GET /records?table=events` liefert NDJSON. Beide benötigen `Authorization: Bearer …`. Der Server akzeptiert keine freien SQL-Abfragen, beschränkt gleichzeitige Streams und gibt Treiberfehler nicht an Clients weiter. Für entfernten Betrieb ist ein HTTPS-Reverse-Proxy erforderlich. Das Backend ist nicht Teil des statischen Vercel-Deployments. Der gemeinsame HTTP-Weg ist im Browser geprüft; die Treiber wurden zusätzlich gegen isolierte PostgreSQL-16- und MariaDB-11-Testdatenbanken mit Lesekonten, Text-/Datumserhalt und Verbindungsabbruch geprüft. SQL Server/Oracle sowie Append/Update/Upsert bleiben spätere Erweiterungen.
 
 ## Festival-Datensatz
 
@@ -80,9 +104,11 @@ Für Vercel das GitHub-Repository importieren: Framework `Astro`, Build `npm run
 
 ## Prüfstand
 
-21 automatisierte Tests decken Import einschließlich CSV-Formatoptionen und fehlerhafter CSV-Daten, CSV-Export mit Spaltenauswahl und Maskierung, rekursive Filter und Wertvorschläge, exakte Event-ID-Filter, Zeitfelderkennung, automatische Zeitstrahl-Sichtbarkeit und manuelle Zuordnung, Tagesauswahl, ungültige Datums-/Zeitwerte, den Festivalplan samt Abhängigkeiten, hierarchische Detaildarstellung sowie Anlage und Schreiben eines leeren Jazz-Kontos ab. Die letzte Ausführung und der Produktions-Build waren erfolgreich. Eine interaktive Browserprüfung war in der Entwicklungsumgebung nicht möglich, weil kein Browser verbunden war.
+Die ursprünglichen 21 Tests bleiben erhalten; zusätzliche Tests prüfen SQLite, Importgenerationen, Chunkgrenzen, XML-/CSV-/JSON-/YAML-Grenzfälle, paginierte Abfragen, Detailbäume und den HTTP-Connector. `npm test` und `npm run build` laufen mit Node.js 22. Das [Prüfprotokoll](docs/data-architecture-validation.md) enthält die aktuelle Abnahme.
 
-`npm audit` meldet nach dem Jazz-Update noch drei betroffene Pakete (Astro, esbuild, sharp; zwei hoch, eines niedrig). Die angebotene vollständige Korrektur erfordert einen Wechsel auf eine neuere Astro-Hauptversion. Astro 5 bleibt entsprechend der Projektvorgabe erhalten. Die Demo wird statisch gebaut, verwendet keine Server Islands, dynamischen Astro-Attribute oder Bildverarbeitung. Vor produktivem Einsatz den Framework-Wechsel und die Meldungen erneut prüfen. Der Jazz-Client erzeugt außerdem ein großes JavaScript-Bundle; der Build weist darauf hin.
+Für Browserprüfungen den lokalen Server starten und `DLENS_TEST_URL=http://127.0.0.1:4321 npm run test:browser` ausführen. `npm run test:large` erzeugt standardmäßig eine mindestens 2,2 GB große XML-Datei; Größe und URL lassen sich über `DLENS_BENCH_BYTES` und `DLENS_TEST_URL` konfigurieren. Die Skripte verwenden den lokal installierten Chrome und erzeugen isolierte Testprofile unter `artifacts/`. `DLENS_VITE_CACHE` erlaubt bei geteilten Entwicklungsumgebungen einen eigenen Vite-Cache.
+
+Der Build weist weiterhin auf das große Jazz-Client-Bundle hin. Abhängigkeiten und Audit-Status vor einem produktiven Release erneut prüfen; der Framework-Stand bleibt gemäß Projektvorgabe Astro 5.
 
 ## Importformat
 
