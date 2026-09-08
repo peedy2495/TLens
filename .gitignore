@@ -1,5 +1,4 @@
 *.odg
-Mokup.png
 node_modules/
 dist/
 .astro/
