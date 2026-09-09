@@ -143,3 +143,11 @@ In der Detailansicht einer Tabellenzeile entfernt **Datensatz löschen** diese Z
 Im Quellenauswahlmenü löscht der Papierkorb ganz rechts den jeweiligen Import nach Bestätigung. Beim Löschen einer anderen Quelle bleibt die aktuelle Auswahl erhalten.
 
 Der Header zeigt weder einen Prototyp-Hinweis noch eine Benutzerattrappe.
+
+### KYAML-Import
+
+`.kyaml`-Dateien können über Dateiauswahl und Drag & Drop importiert werden (auch mit großgeschriebener Endung). KYAML wird als YAML-kompatibles Format durch den vorhandenen sicheren YAML-Parser verarbeitet: Kommentare, Flow-Objekte/-Arrays und abschließende Kommas werden unterstützt. Es gelten dieselbe Grenze von 5.000.000 Bytes und dieselben Sicherheitslimits wie für YAML. Eine strikte KYAML-Stilprüfung und KYAML-Export sind nicht enthalten. Referenz: https://kubernetes.io/docs/reference/encodings/kyaml/
+
+YAML-/YML-/KYAML-Dateien dürfen mehrere durch YAML-Dokumentmarker (`---`, optional `...`) getrennte Dokumente enthalten. Jedes Dokument wird als eigene Quelle gespeichert: `datei.yaml · Teil 1`, `datei.yaml · Teil 2` (bei englischer Importsprache `Part 1`, `Part 2`). Auch ein einzelnes Dokument erhält die Nummer 1. Nach dem Import ist der erste Teil ausgewählt. Die gesamte Datei bleibt auf 5.000.000 Bytes und 1.000 Dokumente begrenzt; leere oder nicht tabellarisch darstellbare Dokumente führen zu einem Fehler. Alle Teile werden atomar freigegeben. Reimport ersetzt Teile nach Dateiname und Nummer, unabhängig von der Importsprache, und entfernt überzählige alte Teile.
+
+**Speicher zurücksetzen:** „Alle importierten Daten löschen“ ist auch ohne sichtbare Quellen verfügbar (während einer laufenden Verarbeitung gesperrt). Nach Bestätigung schließt der Worker SQLite, leert ausschließlich den DLens-SQLite-Dateipool und erstellt eine neue Datenbank. Damit werden auch Reste fehlgeschlagener Imports entfernt. Jazz und Browserpräferenzen bleiben erhalten.

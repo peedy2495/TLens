@@ -110,3 +110,21 @@ it("rejects conflicting MIME types and unbounded field names", () => {
     split(jsonParser(sink()), JSON.stringify({ ["x".repeat(1025)]: "value" })),
   ).toThrow("1,024");
 });
+
+it("imports KYAML flow syntax with comments, trailing commas and explicit string types", () => {
+  const format = formatFor({ name: "resources.KYAML", type: "application/yaml" });
+  expect(format).toBe("yaml");
+  expect(formatFor({ name: "resources.kyaml" })).toBe("yaml");
+  expect(() => formatFor({ name: "resources.kyaml", type: "application/xml" })).toThrow();
+  const target = sink();
+  split(createParser(format, target, defaultCsvOptions), `---
+  {items: [
+    # Quoted strings must retain their types.
+    {id: "001", enabled: "true", count: 2, nested: {name: "Ä",},},
+  ],}`);
+  expect([...target.nodes.values()].filter((node) => node.tablePath)).toHaveLength(1);
+  expect([...target.nodes.values()].find((node) => node.name === "id")?.value).toBe('"001"');
+  expect([...target.nodes.values()].find((node) => node.name === "enabled")?.value).toBe('"true"');
+  expect([...target.nodes.values()].find((node) => node.name === "count")?.value).toBe('2');
+  expect(() => split(createParser(format, sink(), defaultCsvOptions), '---\n{items: [}')).toThrow();
+});

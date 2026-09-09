@@ -1,8 +1,10 @@
 import { sources } from "./connectors";
+import { parseAllDocuments } from "yaml";
 import { createParser } from "./parsers";
 import {
   formatFor,
   limits,
+  type Dataset,
   type Progress,
   type Connector,
   type EntitySink,
@@ -112,5 +114,70 @@ export async function ingestConnector(
     throw error;
   } finally {
     await source.close();
+  }
+}
+
+export async function ingestYamlDocuments(
+  repository: Repository, file: File, csv: CsvOptions, signal: AbortSignal,
+  progress: (p: Progress) => void, language: "de" | "en" = "de",
+) {
+  if (file.size > limits.yamlBytes) throw new Error("YAML: Maximal 5 MB / Maximum 5 MB.");
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+  signal.throwIfAborted();
+  const documents = parseAllDocuments(text, { uniqueKeys: true });
+  if (!documents.length || documents.length > 1000) throw new Error("YAML: 1–1000 Dokumente / documents required.");
+  const previous = repository.list().filter((data) => data.format === "yaml" &&
+    (data.sourceFile === file.name || (!data.sourceFile && data.name === file.name)));
+  const staged: ReturnType<Repository["begin"]>[] = [];
+  let records = 0;
+  try {
+    for (const [index, document] of documents.entries()) {
+      signal.throwIfAborted();
+      if (document.errors.length) throw document.errors[0];
+      if (document.warnings.length) throw document.warnings[0];
+      const value = document.toJS({ maxAliasCount: 50 });
+      const part = index + 1;
+      const old = previous.find((data) => (data.part ?? 1) === part);
+      const input = repository.begin(`${file.name} · ${language === "de" ? "Teil" : "Part"} ${part}`, "yaml", old?.id);
+      staged.push(input);
+      const parser = createParser("json", {
+        add: (entity) => repository.add(input.generation, entity),
+        update: (id, value) => repository.updateEntity(input.generation, id, value),
+      }, csv);
+      repository.db.transaction(() => {
+        parser.write(new TextEncoder().encode(JSON.stringify(value)));
+        parser.end();
+      });
+      repository.prepareProjection(input.generation, false);
+      let after = 0;
+      for (;;) {
+        signal.throwIfAborted();
+        const batch = repository.projectBatch(input.generation, after);
+        records += batch.count;
+        after = batch.after;
+        if (!batch.count) break;
+        progress({ phase: "indexing", bytes: file.size, total: file.size, records });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+    signal.throwIfAborted();
+    const datasets: Dataset[] = [];
+    // Publish all documents together so a malformed later part preserves the old file.
+    repository.db.transaction(() => {
+      for (const [index, input] of staged.entries()) {
+        const data = { ...repository.complete(input, file.size), sourceFile: file.name, part: index + 1 };
+        repository.db.exec({ sql: "UPDATE datasets SET metadata=? WHERE id=?", bind: [JSON.stringify(data), data.id] });
+        datasets.push(data);
+      }
+      for (const old of previous) if (!datasets.some((data) => data.id === old.id)) {
+        repository.db.exec({ sql: "DELETE FROM datasets WHERE id=?", bind: [old.id] });
+        repository.clean(old.generation);
+      }
+    });
+    progress({ phase: "completed", bytes: file.size, total: file.size, records });
+    return datasets;
+  } catch (error) {
+    for (const input of staged) repository.fail(input.generation, signal.aborted ? "cancelled" : "error", String(error));
+    throw error;
   }
 }

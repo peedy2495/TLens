@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import sqlite3InitModule, { type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { Repository } from "../storage/repository";
-import { ingest } from "./service";
+import { ingest, ingestYamlDocuments } from "./service";
 import { defaultCsvOptions, parseCsv } from "../csv";
 import { toTables, type Table } from "../data";
 import type { Query } from "./contracts";
@@ -187,4 +187,22 @@ describe("persistent ingestion and queries", () => {
       repo.query(query(data.id, { pages: { '["Root"]': 200 } })).tables[0].rows,
     ).toHaveLength(5);
   });
+});
+
+it("imports YAML documents atomically with stable numbered sources and language-aware names", async () => {
+  const repo = repository();
+  const loadParts = (text: string, language: "de" | "en" = "de", signal = new AbortController().signal) =>
+    ingestYamlDocuments(repo, new File([text], "bundle.kyaml"), defaultCsvOptions, signal, () => {}, language);
+  const parts = await loadParts('---\n{rows: [{ID: "001", note: "---"}]}\n---\n{rows: [{ID: "002"}]}');
+  expect(parts.map((part) => part.name)).toEqual(["bundle.kyaml · Teil 1", "bundle.kyaml · Teil 2"]);
+  expect(repo.query(query(parts[1].id)).tables[0].rows[0].ID).toBe("002");
+  await expect(loadParts('---\n{rows: [{ID: "changed"}]}\n---\n{broken: [}')).rejects.toThrow();
+  expect(repo.query(query(parts[0].id)).tables[0].rows[0].ID).toBe("001");
+  await expect(loadParts('---\n{rows: [{ID: "changed"}]}\n---\nnull')).rejects.toThrow();
+  expect(repo.list().map((part) => part.generation)).toEqual(parts.map((part) => part.generation));
+  const controller = new AbortController(); controller.abort();
+  await expect(loadParts('rows: [{ID: "cancelled"}]', "de", controller.signal)).rejects.toThrow();
+  const updated = await loadParts('rows: [{ID: "003"}]', "en");
+  expect(updated[0]).toMatchObject({ id: parts[0].id, name: "bundle.kyaml · Part 1", sourceFile: "bundle.kyaml", part: 1 });
+  expect(repo.list()).toHaveLength(1);
 });

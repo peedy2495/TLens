@@ -53,6 +53,8 @@ export interface Progress {
   records: number;
 }
 export interface Dataset {
+  sourceFile?: string;
+  part?: number;
   id: string;
   name: string;
   format: string;
@@ -116,7 +118,7 @@ export interface ChildPage {
 }
 export type Request =
   | { type: "list" }
-  | { type: "import"; file: File; csv: CsvOptions; replace?: string }
+  | { type: "import"; file: File; csv: CsvOptions; replace?: string; language?: "de" | "en" }
   | { type: "remote"; url: string; token: string; name: string }
   | { type: "jazz"; data: string; account: string; name: string }
   | {
@@ -162,17 +164,17 @@ export function formatFor(file: { name: string; type?: string }): Format {
   const declaredFormat = declared[file.type?.split(";")[0].toLowerCase() ?? ""];
   if (
     declaredFormat &&
-    declaredFormat !== (extension === "yml" ? "yaml" : extension)
+    declaredFormat !== (extension === "yml" || extension === "kyaml" ? "yaml" : extension)
   )
     throw new SourceError(
       "FORMAT",
       "Dateiendung und Medientyp widersprechen sich / File extension and MIME type disagree.",
     );
-  if (extension === "yml" || extension === "yaml") return "yaml";
+  if (extension === "yml" || extension === "yaml" || extension === "kyaml") return "yaml";
   if (extension === "json" || extension === "csv" || extension === "xml")
     return extension;
   throw new SourceError(
     "FORMAT",
-    "Nicht unterstütztes Dateiformat / Unsupported format: JSON, YAML, YML, CSV, XML.",
+    "Nicht unterstütztes Dateiformat / Unsupported format: JSON, YAML, YML, KYAML, CSV, XML.",
   );
 }

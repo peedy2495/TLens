@@ -239,6 +239,7 @@ function WorkspaceApp() {
         : mode === "source" ? { type: "delete" as const, dataset: target!.id }
         : { type: "delete-record" as const, dataset: detail!.dataset!, generation: selectedDataset!.generation, record: detail!.record! };
       setFiles(await storage.current.request<Dataset[]>(request));
+      if (mode === "all") { setStorageReady(true); setStorageError(""); }
       if (mode !== "source" || target?.id === source) {
         setDetail(null); setResult(null); setPages({}); setPathPage(0); setTimelinePage(0); setValuePage(0);
         if (mode !== "record") setSource("");
@@ -344,8 +345,11 @@ function WorkspaceApp() {
       formatFor(file);
       if (!storage.current) throw new Error("Datenbank noch nicht bereit / Database not ready");
       setWorking(true); setProgress({ phase: "reading", bytes: 0, total: file.size, records: 0 });
-      const dataset = await storage.current.request<Dataset>({ type: "import", file, csv: csvOptions, replace: files.find((f) => f.name === file.name && f.format !== "jazz")?.id }, { progress: setProgress });
-      setFiles((previous) => [...previous.filter((f) => f.id !== dataset.id), dataset]);
+      const imported = await storage.current.request<Dataset | Dataset[]>({ type: "import", file, csv: csvOptions, language, replace: files.find((f) => f.name === file.name && f.format !== "jazz")?.id }, { progress: setProgress });
+      const datasets = Array.isArray(imported) ? imported : [imported];
+      const dataset = datasets[0];
+      setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
+      setTimeColumnsBySource((previous) => ({ ...previous, ...Object.fromEntries(datasets.map((data) => [data.id, data.mapping])) }));
       setResult(null); setSource(dataset.id);
       setTimeColumnsBySource((previous) => ({ ...previous, [dataset.id]: dataset.mapping }));
       setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setPanel("");
@@ -475,7 +479,7 @@ function WorkspaceApp() {
                 </strong>
                 <small>
                   {sourceDragActive
-                    ? "JSON / YAML / CSV / XML"
+                    ? "JSON / YAML / KYAML / CSV / XML"
                     : source === "jazz"
                     ? "Jazz · Local-first"
                     : t(
@@ -506,7 +510,7 @@ function WorkspaceApp() {
             ref={fileInput}
             type="file"
             disabled={!storageReady || working}
-            accept=".json,.yaml,.yml,.csv,.xml"
+            accept=".json,.yaml,.yml,.kyaml,.csv,.xml"
             hidden
             onChange={(event) => {
               void importFile(event.target.files?.[0]);
@@ -520,7 +524,7 @@ function WorkspaceApp() {
               <button onClick={() => fileInput.current?.click()}>
                 <PlusIcon />
                 {t("Datei importieren", "Import file")}
-                <small>JSON / YAML / CSV / XML</small>
+                <small>JSON / YAML / KYAML / CSV / XML</small>
               </button>
               <div className="panel-label">{t("DATENBANKEN / API", "DATABASES / API")}</div>
               {files.filter((file) => ["jazz", "api"].includes(file.format)).map(sourceOption)}
@@ -1228,10 +1232,10 @@ function WorkspaceApp() {
               {t(
                 source
                   ? "Passe deine Suche oder Filter an."
-                  : "Ziehe eine JSON-, YAML-, CSV- oder XML-Datei hierher oder öffne eine Datei.",
+                  : "Ziehe eine JSON-, YAML-, KYAML-, CSV- oder XML-Datei hierher oder öffne eine Datei.",
                 source
                   ? "Adjust your search or filters."
-                  : "Drop a JSON, YAML, CSV or XML file here or open a file.",
+                  : "Drop a JSON, YAML, KYAML, CSV or XML file here or open a file.",
               )}
             </p>
             <button
@@ -1414,7 +1418,7 @@ function WorkspaceApp() {
             <p>{t("Importierte Dateien bleiben lokal in diesem Browser gespeichert. Die Originaldatei wird nicht zusätzlich kopiert.", "Imported files persist locally in this browser. Original files are not duplicated.")}</p>
             <button onClick={() => { void navigator.storage?.persist().then((granted) => setNotice(granted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Browser hat dauerhaften Speicher nicht gewährt", "Browser did not grant persistent storage"))); }}>{t("Dauerhaften Browserspeicher anfragen", "Request persistent browser storage")}</button>
             {selectedDataset && <button disabled={working} onClick={() => void deleteImported("source")}>{t("Ausgewählte Quelle löschen", "Delete selected source")}</button>}
-            <button disabled={!storageReady || working || !files.length} onClick={() => void deleteImported("all")}>{t("Alle importierten Daten löschen", "Delete all imported data")}</button>
+            <button disabled={working} onClick={() => void deleteImported("all")}>{t("Alle importierten Daten löschen", "Delete all imported data")}</button>
             <p className="subtle">
               MariaDB · PostgreSQL —{" "}
               {t(

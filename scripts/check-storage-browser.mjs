@@ -179,6 +179,11 @@ try {
   await clickText("Alle importierten Daten löschen");
   await page.waitForFunction(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled);
   await page.waitForFunction(() => !document.querySelector("input[type=file]").disabled);
+  // Reset must remain available even when no datasets are visible.
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen").disabled), false);
+  page.once("dialog", (dialog) => dialog.accept());
+  await clickText("Alle importierten Daten löschen");
+  await page.waitForFunction(() => !document.querySelector("input[type=file]").disabled);
   await page.reload();
   await page.waitForSelector("input[type=file]:not(:disabled)");
   await page.click(".source-button");

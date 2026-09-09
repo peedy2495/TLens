@@ -386,6 +386,7 @@ export class Repository {
       ),
     );
     const metadata: Dataset = {
+      ...JSON.parse(String(this.db.selectValue("SELECT metadata FROM datasets WHERE id=?", [id]) ?? "{}")),
       id,
       generation,
       name,

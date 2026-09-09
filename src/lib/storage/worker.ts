@@ -5,14 +5,15 @@ import sqlite3InitModule, {
 } from "@sqlite.org/sqlite-wasm";
 import wasmUrl from "@sqlite.org/sqlite-wasm/sqlite3.wasm?url";
 import { Repository } from "./repository";
-import { ingest, ingestConnector } from "../ingestion/service";
+import { ingest, ingestConnector, ingestYamlDocuments } from "../ingestion/service";
 import { ndjsonParser } from "../ingestion/http";
 import { sources } from "../ingestion/connectors";
 import { exportData } from "./export";
-import type { Request } from "../ingestion/contracts";
+import { formatFor, type Request } from "../ingestion/contracts";
 
 declare const self: DedicatedWorkerGlobalScope;
 let repository: Promise<Repository> | undefined;
+let resetDatabase: (() => Promise<Repository>) | undefined;
 function open() {
   if (!repository)
     repository = new Promise<Repository>((resolve, reject) => {
@@ -52,12 +53,26 @@ function open() {
               const PoolDatabase = pool.OpfsSAHPoolDb as unknown as new (
                 filename: string,
               ) => Database;
-              const repo = new Repository(
-                new PoolDatabase("/dlens.sqlite3"),
-                sqlite,
-              );
-              repo.recover();
-              resolve(repo);
+              let current: Repository | undefined;
+              const create = () => {
+                const db = new PoolDatabase("/dlens.sqlite3");
+                try { return new Repository(db, sqlite); }
+                catch (error) { db.close(); throw error; }
+              };
+              resetDatabase = async () => {
+                current?.close();
+                current = undefined;
+                await pool.wipeFiles();
+                current = create();
+                repository = Promise.resolve(current);
+                return current;
+              };
+              try {
+                current = create();
+                current.recover();
+                resolve(current);
+              } catch (error) { reject(error); }
+              // Retain exclusive ownership even when opening failed, allowing an explicit reset.
               await new Promise(() => {});
             } catch (error) {
               reject(error);
@@ -92,9 +107,13 @@ self.onmessage = async ({
   const controller = new AbortController();
   active = { id: data.id, controller };
   try {
-    const repo = await open();
-    controller.signal.throwIfAborted();
     const request = data.request!;
+    const opened = await open().catch((error) => {
+      if (request.type === "delete-all" && resetDatabase) return undefined;
+      throw error;
+    });
+    controller.signal.throwIfAborted();
+    const repo = request.type === "delete-all" ? await resetDatabase!() : opened!;
     let result: unknown;
     switch (request.type) {
       case "list":
@@ -109,7 +128,6 @@ self.onmessage = async ({
         result = repo.list();
         break;
       case "delete-all":
-        repo.deleteAll();
         result = repo.list();
         break;
       case "storage":
@@ -141,6 +159,11 @@ self.onmessage = async ({
           throw new Error(
             "Zu wenig Browserspeicher / Insufficient browser storage (estimated 4× source size).",
           );
+        if (formatFor(request.file) === "yaml") {
+          result = await ingestYamlDocuments(repo, request.file, request.csv, controller.signal,
+            (progress) => self.postMessage({ id: data.id, progress }), request.language);
+          break;
+        }
         result = await ingest(
           repo,
           request.file,
