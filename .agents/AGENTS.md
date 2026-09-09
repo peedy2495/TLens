@@ -112,7 +112,7 @@ Group settings into these sections:
 - Allow deleting one persisted table record with its nested data from the record detail dialog, deleting the selected source, and deleting all imported SQLite data from settings. Require confirmation for each action.
 - Refresh counts, fields, pages and exports after deletion. Reject record deletion against a stale import generation. Preserve other records and roll back individual deletions on failure.
 - Reset removes all SQLite datasets, hierarchy, projections, import history and Jazz migration fingerprints, and reclaims SQLite space. Preserve original Jazz data and UI preferences. New imports must remain possible.
-- Maintain agent requirements exclusively under `.agents`; do not recreate a root `AGENTS.md`. The historical legacy baseline is archival.
+- Maintain central agent requirements under `.agents`; root `AGENTS.md` is only a short routing entry point. The historical legacy baseline is archival.
 
 - Show a right-aligned Heroicons outline trash button for each imported source in the selector, including local API/Jazz copies. Keep selection and delete buttons separate and keyboard-accessible. Confirm deletion by source name; deleting another source must preserve the current selection. The original legacy Jazz source has no delete action.
 
@@ -120,3 +120,89 @@ Group settings into these sections:
 
 - Hide the legacy Jazz source selector entry, Jazz settings and migration action until sharing is implemented. Preserve Jazz storage and internal migration support; existing SQLite copies remain accessible. This overrides earlier requirements to expose Jazz configuration or migration in settings.
 - Do not show a Prototype badge or a fake user/avatar in the header.
+
+## Planning, delegated execution and review
+
+### Roles and scope
+
+- **Codex / Astra** owns problem and repository analysis, architecture decisions,
+  relevant-file discovery, dependencies, risks, `PLAN.md`, concrete acceptance
+  criteria, implementation review and replanning. Spend reasoning on decisions,
+  not mechanical edits.
+- **OpenCode / Muse Spark 1.3 Contributor** implements the completed plan, changes
+  files, adds/updates tests, runs project checks and fixes ordinary compiler,
+  typecheck, lint and test failures autonomously. It must not invent architecture.
+- This orchestration applies to Codex. An OpenCode executor reading these rules
+  implements the supplied plan directly; it must not recursively delegate or
+  invoke the executor again, select another model or launch other agents.
+- Codex may directly handle obvious one-liners, very small local fixes, pure
+  documentation, trivial configuration and small changes needing no design
+  decision. Avoid delegation overhead for these. Initial workflow installation
+  and safe setup checks are handled directly; do not start a feature run to test it.
+
+### Standard cycle
+
+1. Analyze the task and only the relevant repository areas. Read applicable rules
+   and skills, understand the current `git status`, and preserve user changes.
+2. Create/update root `PLAN.md`: resolve architecture decisions, define concrete
+   work packages, known files, constraints, checks and acceptance criteria.
+   Planning must be complete before delegation; task authorization is sufficient
+   unless an actual unresolved decision or permission requires user input.
+3. For non-trivial implementation, use
+   `.agents/skills/opencode-executor/SKILL.md`; Codex does not implement the plan
+   itself unless the direct-change exception applies.
+4. Let OpenCode finish autonomously. Do not mirror each action or repeatedly send
+   file contents it can read itself. Retain its final result and check outcomes.
+5. Review `git status`, `git diff`, staged and new files, relevant test results,
+   applicable typecheck/lint results, agreement with `PLAN.md`, and every acceptance
+   criterion. Compare against the pre-run baseline; do not attribute user edits to Muse.
+   Use the existing commands above (`npm run build` includes typecheck); no separate
+   lint script currently exists. Run or inspect the relevant checks; avoid repeating
+   successful checks unless changes, failures or missing evidence justify it.
+6. Ordinary implementation failure stays with Muse. A contradictory/impossible
+   plan, missing API/data-model decision or architectural conflict means **STOP**:
+   Muse reports what is blocked, why, and which planning decision is needed.
+   Codex revisits that area, updates `PLAN.md`, then delegates again. Do not increase
+   effort to substitute for missing planning. Do not endlessly retry an unchanged blocker.
+7. Report completion only after review and acceptance; otherwise report the blocker.
+
+### Compact plan contract
+
+Use `.agents/skills/opencode-executor/references/plan-template.md` for root
+`PLAN.md`: `Goal`, `Constraints`, numbered `Tasks` with `Files`, `Changes`,
+`Verification`, then `Acceptance Criteria`. Keep it executable, not essayistic:
+only relevant files, specific changes, concrete checks and settled design decisions.
+Do not repeat the repository architecture. Record the understood dirty-file baseline
+and any explicitly authorized effort override under Constraints. After completion,
+mark the plan completed; never execute a stale/completed plan for a new task.
+
+### Model and reasoning policy
+
+- Delegated implementation uses only **Muse Spark 1.3 Contributor**, pinned to
+  `opencode/muse-spark-1.3-contributor-free` in the executor. Local OpenCode 1.18.30
+  reports the display name **Muse Spark 1.3 Free** for this contributor identifier.
+  Never silently use the non-contributor model, an OpenCode Go fallback, another
+  provider/model, or Codex as an automatic implementation fallback.
+- If the model is unavailable, authentication fails or execution cannot start,
+  stop and report the actual error. Model discovery is setup/repair work, not a
+  repeated normal-run operation. CLI metadata availability is not proof of live
+  authentication or service availability.
+- `medium` is the default, passed as `--variant medium`. `minimal` is only for
+  extremely mechanical repetitive edits; `low` for small, fully specified local
+  tasks; `medium` for normal features, fixes, planned refactors, tests and multi-step
+  changes; `high` for technically difficult implementation/debugging **after**
+  architecture is settled. Record a non-default choice in the plan.
+- `xhigh` requires an explicit user request and the executor's explicit opt-in.
+  Never escalate automatically. Provider default is not a substitute for `medium`.
+- Conceptually use **Astra Mid** for ordinary planning, refactoring, bug analysis
+  and review; **Astra High** for major architecture, complex migrations, systemic
+  bugs, tightly coupled components or difficult replanning. These are reasoning
+  guidelines, not a claim that repository instructions change the running Codex
+  model/effort; use the host's available settings when supported.
+- User-supplied Muse limits for this workflow (not CLI-verified quotas): 45,300
+  requests / 5 hours; 113,300 / week; 226,600 / month. Prioritize reliable execution,
+  fewer reruns, clear handoff and compact context before minimizing individual
+  requests. Do not infer guaranteed service capacity from these figures.
+- Review primarily `PLAN.md` + diff + affected files + check results. Broaden
+  analysis only for a real planning problem. Preserve existing skills, architecture
+  and user changes; add no unrelated dependencies or refactors.

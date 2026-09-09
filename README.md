@@ -59,6 +59,72 @@ CSV-Format, Zeitstrahl-Sichtbarkeit und Farbspalte werden im Browser gespeichert
 
 Bei künftigen Änderungen werden README.md (Bedienung und Implementierungsstand) und .agents/AGENTS.md (Anforderungen und Entwicklungsregeln) gemeinsam gepflegt.
 
+### Agentischer Entwicklungsworkflow
+
+Root `AGENTS.md` verweist kurz auf die zentralen Regeln in `.agents/AGENTS.md`.
+Für nicht-triviale Aufgaben analysiert und plant Codex/Astra, schreibt ein kompaktes
+`PLAN.md` mit Arbeitspaketen, Dateien, Prüfungen und Akzeptanzkriterien und verwendet
+danach den [OpenCode-Executor-Skill](.agents/skills/opencode-executor/SKILL.md).
+OpenCode/Muse implementiert und behebt normale Test-/Compiler-/Typfehler selbst.
+Codex prüft anschließend Diff, betroffene Dateien, Testergebnisse und Akzeptanz.
+Architekturblocker gehen zurück an Codex zur Neuplanung. Triviale lokale Änderungen
+und reine Dokumentation dürfen direkt erledigt werden. Bestehende Skills bleiben erhalten.
+
+Die [Planvorlage](.agents/skills/opencode-executor/references/plan-template.md)
+wird bei einer konkreten Aufgabe als `PLAN.md` ausgefüllt; die Einrichtung erzeugt
+bewusst keinen ausführbaren Produktplan. Start nach abgeschlossener Planung:
+
+```bash
+bash .agents/skills/opencode-executor/scripts/execute-plan.sh
+```
+
+Das Script wechselt selbst ins Repository; ein absoluter Scriptpfad funktioniert
+auch aus anderen Arbeitsverzeichnissen. Es verwendet fest
+`opencode/muse-spark-1.3-contributor-free`, den Agenten `build` und standardmäßig
+`--variant medium`. Die vollständige Invocation im Script lautet:
+
+```bash
+opencode run --agent build --model "$model" --variant "$effort" "$prompt" </dev/null
+```
+
+`model` ist die oben festgelegte ID, `effort` standardmäßig `medium`, und `prompt`
+der kompakte Implementierungsauftrag im Script. Dateiinhalte werden nicht als
+Argumente kopiert. `--effort minimal|low|medium|high` überschreibt den Standard
+entsprechend der zentralen Routing-Regeln. `--effort xhigh --allow-xhigh` ist nur
+nach ausdrücklicher Nutzeranweisung zulässig. Kein automatischer Modellwechsel,
+keine automatischen Wiederholungen, keine pauschale Freigabe mit `--auto`.
+
+Lokale Einrichtung am 09.09.2026 geprüft: OpenCode **1.18.30**, `run` ohne
+`--interactive`, Modellwahl über `--model`, Effort über `--variant`, Prompt als
+Positionsargument. `opencode models opencode --verbose` führt die Contributor-ID
+unter dem Anzeigenamen **Muse Spark 1.3 Free**; ihre Variante `medium` setzt
+`reasoningEffort: medium`. Der Agent `build` ist lokal vorhanden. Die Modell-ID
+wird bei normalen Läufen nicht erneut ermittelt.
+
+Sichere Setup-Checks ohne Modellaufruf:
+
+```bash
+bash -n .agents/skills/opencode-executor/scripts/execute-plan.sh
+bash .agents/skills/opencode-executor/scripts/test-executor.sh
+bash .agents/skills/opencode-executor/scripts/execute-plan.sh --check
+```
+
+`--check` verlangt ein existierendes, nicht leeres `PLAN.md`; ohne Plan endet es
+erwartungsgemäß mit Code 66. Der isolierte Test verwendet ausschließlich eine
+CLI-Attrappe und prüft Pfade mit Leerzeichen, fremdes Arbeitsverzeichnis,
+Fehlerfälle, feste Modellwahl und Effort-Übergabe. Codes: 64 für ungültige Argumente,
+66 für fehlende Dateien/falsches Repository, 69 für fehlende CLI; OpenCode-Fehlercodes
+werden unverändert weitergegeben. Auch bei Exit 0 muss Codex den Abschlussbericht
+auf Blocker und die Änderungen auf Erfüllung des Plans prüfen.
+
+Es wurde **kein echter Implementierungslauf** gestartet. Anmeldung, Live-Modellzugriff
+und die Bearbeitung konkreter Tool-Berechtigungen sind damit nicht getestet;
+der Executor erweitert vorhandene Berechtigungen nicht. OpenCode benötigt Zugriff
+auf seine lokalen Log-/Konfigurationsverzeichnisse, gegebenenfalls eine Freigabe
+der ausführenden Umgebung. Die vorherige Regel gegen eine Root-`AGENTS.md` wurde
+gezielt auf einen kurzen Einstiegspunkt geändert; zentrale Produktregeln bleiben
+unter `.agents`. Es wurden keine Produktabhängigkeiten hinzugefügt.
+
 Die App startet ohne ausgewählte Datenquelle und ohne automatisch geladene Demo-Daten. Neue Dateiimporte bleiben jetzt über Sitzungen hinweg in SQLite verfügbar; diese Änderung ersetzt die frühere Sitzungsaufbewahrung. Ein erneuter Import desselben Dateinamens aktiviert den neuen Stand erst nach vollständigem Erfolg. Fehler oder Abbruch erhalten den bisherigen Stand. Originaldateien werden nicht zusätzlich kopiert. Ein ausgewählter SQLite-Datensatz lässt sich in den Einstellungen löschen.
 
 OPFS und Web Locks müssen im Browser verfügbar sein. Ein zentraler Worker hält die Datenbank exklusiv; ein zweiter Tab zeigt eine Sperrmeldung. Ohne OPFS erfolgt kein stiller Wechsel zu flüchtigem Speicher. Der Browser entscheidet über Speicherquota und die Gewährung dauerhafter Speicherung; die Einstellungen zeigen den Status und erlauben eine Persistenzanfrage.
