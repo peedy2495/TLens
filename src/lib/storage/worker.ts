@@ -104,6 +104,14 @@ self.onmessage = async ({
         repo.delete(request.dataset);
         result = repo.list();
         break;
+      case "delete-record":
+        repo.deleteRecord(request.dataset, request.generation, request.record);
+        result = repo.list();
+        break;
+      case "delete-all":
+        repo.deleteAll();
+        result = repo.list();
+        break;
       case "storage":
         result = {
           ...(await navigator.storage.estimate()),

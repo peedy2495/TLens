@@ -44,3 +44,7 @@ Rohmessungen entstehen unter `artifacts/storage-benchmark/`. Die rund 12 GB erze
 - Die 2,2-GB-Abnahme betrifft die beschriebene Datensatzstruktur. Andere Großdateistrukturen müssen die dokumentierten Einzelwert-, Zeilen- und Tiefengrenzen einhalten. Kleine Tests decken weitere XML-Formen, Namespaces und verschachtelte Werte ab.
 - Abbruch erfolgt an Chunk-/Batch-Grenzen. Während einer einzelnen synchronen SQLite-Abfrage oder Pfadprojektion kann die Antwort länger dauern; harte Echtzeitabbruchgarantien gibt es nicht.
 - Append, Update, Upsert, zusätzliche SQL-Server/Oracle-Adapter und Anmeldung/Synchronisierung sind weiterhin spätere Erweiterungen. Für New sowie Re-import/Replace ist der vollständige lokale Pfad implementiert.
+
+## Ergänzung: Löschfunktionen (9. September 2026)
+
+53 automatisierte Tests und der Produktions-Build bestanden. Der neue Repository-Test prüft Einzel-Löschung, Metadaten, Transaktions-Rollback bei Fehlern, veraltete Generationen, leere Quellen und vollständiges Zurücksetzen. Der Chrome-Browsertest prüft abgelehnte und bestätigte Einzel-Löschung, Bestand nach Neuladen, Löschen einer Quelle, Reset und anschließenden Neuimport. Browserprüfungen verwenden nun ein eigenes Profil pro Lauf.

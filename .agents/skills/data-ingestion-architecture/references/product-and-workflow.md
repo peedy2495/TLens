@@ -20,7 +20,7 @@ Preserve rename compatibility:
 
 ## Documentation and development workflow
 
-Maintain both `README.md` and root `AGENTS.md` alongside future feature,
+Maintain both `README.md` and `.agents/AGENTS.md` alongside future feature,
 behavior, configuration, and workflow changes.
 
 - README: usage and current implementation

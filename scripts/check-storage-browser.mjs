@@ -43,7 +43,7 @@ const browser = await puppeteer.launch({
   executablePath: "/usr/bin/google-chrome",
   headless: true,
   args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  userDataDir: root + "/profile",
+  userDataDir: root + "/profile-" + Date.now(),
 });
 try {
   const page = await browser.newPage();
@@ -139,8 +139,54 @@ try {
   await page.waitForFunction(() =>
     document.querySelector("tbody")?.textContent.includes("api-001"),
   );
+  const clickText = async (text) => page.evaluate((text) => {
+    const button = [...document.querySelectorAll("button")].find((b) => b.textContent === text);
+    if (!button) throw new Error("Missing button: " + text);
+    button.click();
+  }, text);
+  await page.click("tbody tr");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await clickText("Datensatz löschen");
+  assert.equal(await page.$$eval("tbody tr", (rows) => rows.length), 2);
+  page.once("dialog", (dialog) => dialog.accept());
+  await clickText("Datensatz löschen");
+  await page.waitForFunction(() => !document.querySelector(".record-dialog") && document.querySelectorAll("tbody tr").length === 1);
+  assert.match(await page.$eval("tbody", (el) => el.textContent), /api-002/);
+  await page.reload();
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  await page.click(".source-button");
+  await page.evaluate(() => [...document.querySelectorAll(".sources button")].find((b) => b.textContent.includes("API ·")).click());
+  await page.waitForFunction(() => document.querySelectorAll("tbody tr").length === 1);
+  await page.click(".source-button");
+  const trash = await page.$(".source-option .source-delete");
+  const rowBounds = await trash.evaluate((button) => {
+    const row = button.parentElement.getBoundingClientRect();
+    const icon = button.getBoundingClientRect();
+    return Math.abs(row.right - icon.right);
+  });
+  assert.ok(rowBounds < 2, "Trash button must align with the right edge");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await trash.click();
+  assert.equal(await page.$$(".source-option").then((rows) => rows.length), 2);
+  page.once("dialog", (dialog) => dialog.accept());
+  await trash.click();
+  await page.waitForFunction(() => document.querySelectorAll(".source-option").length === 1);
+  assert.match(await page.$eval(".source-button", (el) => el.textContent), /API ·/);
+  assert.match(await page.$eval("tbody", (el) => el.textContent), /api-002/);
+  await page.click('button[title="Einstellungen"]');
+  await page.waitForFunction(() => ![...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled);
+  page.once("dialog", (dialog) => dialog.accept());
+  await clickText("Alle importierten Daten löschen");
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled);
+  await page.waitForFunction(() => !document.querySelector("input[type=file]").disabled);
+  await page.reload();
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  await page.click(".source-button");
+  assert.equal(await page.$$eval(".sources button", (buttons) => buttons.filter((b) => /browser-|API ·/.test(b.textContent)).length), 0);
+  await (await page.$("input[type=file]")).uploadFile(root + "/" + name);
+  await page.waitForFunction(() => document.querySelectorAll("tbody tr").length === 2);
   console.log(
-    "PASS: UI XML import, OPFS reload, source selection, exclusive tab ownership, cancellation, authenticated HTTP connector and backend access controls",
+    "PASS: UI XML import, OPFS reload, source selection, exclusive tab ownership, cancellation, authenticated HTTP connector, deletion confirmation, record/source deletion, reset, reimport and backend access controls",
   );
 } catch (error) {
   for (const page of await browser.pages())

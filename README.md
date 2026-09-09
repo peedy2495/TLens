@@ -1,6 +1,6 @@
 # DLens
 
-Data Explorer für hierarchische und tabellarische Daten, gestaltet nach `Mokup.png` und `AGENTS.md`. Header und Seitentitel verwenden den Zusatz „Data Explorer“.
+Data Explorer für hierarchische und tabellarische Daten, gestaltet nach `Mokup.png` und `.agents/AGENTS.md`. Header und Seitentitel verwenden den Zusatz „Data Explorer“.
 
 Das Tool heißt DLens. Vorhandene Einstellungen unter den bisherigen `tlens-`-Schlüsseln werden weiter eingelesen, solange noch kein entsprechender `dlens-`-Wert existiert. Jazz-Daten bleiben erhalten. Der bestehende Projektordner und historische Mockups werden nicht umbenannt.
 
@@ -36,7 +36,7 @@ npm run preview
 - Deutsche/englische Oberfläche, Hell-/Dunkelmodus, responsive Darstellung
 - Export der gefilterten Tabellen als JSON
 - CSV-Export über den CSV-Button jeder Tabelle: gefilterte Zeilen, sichtbare Spalten und aktuelle Sortierung. Ohne sichtbare Spalten ist der Export deaktiviert. Verschachtelte Zellwerte werden als JSON-Text exportiert. Die CSV-Einstellungen gelten auch beim Export; „Automatisch“ verwendet Komma. Dateien enthalten UTF-8 BOM und CRLF-Zeilenenden. Sind Textbegrenzungszeichen deaktiviert, erfordern Werte mit Trennzeichen oder Zeilenumbrüchen deren Aktivierung.
-- Lokaler SQLite-/OPFS-Speicher mit Fortschritt, Abbruch und atomarem Reimport. Bestehende Jazz-Daten bleiben lesbar und können über die Einstellungen idempotent nach SQLite übernommen werden.
+- Lokaler SQLite-/OPFS-Speicher mit Fortschritt, Abbruch und atomarem Reimport. Die Jazz-Bedienelemente sind vorerst ausgeblendet; bestehende Daten bleiben erhalten.
 
 ## Bedienung und Einstellungen
 
@@ -53,17 +53,17 @@ Eine Datei lässt sich direkt auf die Datenquellenauswahl ziehen; das Ziel wird 
 - Das kompakte Suchfeld-Löschsymbol erscheint nur bei vorhandener Eingabe. Bei leerer Suche wird kein Ersatzsymbol angezeigt.
 - **Allgemein:** Sprache.
 - **Anzeige:** Zeitstrahl ein/aus (Default an), Start-/Endzeit-Felder und Einfärbung nach einer gewählten Spalte (Default Area). Gleiche Werte erhalten im Zeitstrahl und in der sichtbaren gewählten Spalte dieselbe Farbe. Die Legende folgt dem angezeigten Tag; fehlende Werte bleiben neutral.
-- **Datenquellen:** CSV-Format, NDJSON-API-/Datenbank-Connector, SQLite-Speicherstatus und Jazz-Übernahme.
+- **Datenquellen:** CSV-Format, NDJSON-API-/Datenbank-Connector, SQLite-Speicherstatus und Löschaktionen.
 
 CSV-Format, Zeitstrahl-Sichtbarkeit und Farbspalte werden im Browser gespeichert. Zeitfeld-Zuordnungen gelten pro Quelle und bleiben beim Wechsel zwischen geladenen Quellen erhalten; beim erneuten Dateiimport wird neu erkannt.
 
-Bei künftigen Änderungen werden README.md (Bedienung und Implementierungsstand) und AGENTS.md (Anforderungen und Entwicklungsregeln) gemeinsam gepflegt.
+Bei künftigen Änderungen werden README.md (Bedienung und Implementierungsstand) und .agents/AGENTS.md (Anforderungen und Entwicklungsregeln) gemeinsam gepflegt.
 
 Die App startet ohne ausgewählte Datenquelle und ohne automatisch geladene Demo-Daten. Neue Dateiimporte bleiben jetzt über Sitzungen hinweg in SQLite verfügbar; diese Änderung ersetzt die frühere Sitzungsaufbewahrung. Ein erneuter Import desselben Dateinamens aktiviert den neuen Stand erst nach vollständigem Erfolg. Fehler oder Abbruch erhalten den bisherigen Stand. Originaldateien werden nicht zusätzlich kopiert. Ein ausgewählter SQLite-Datensatz lässt sich in den Einstellungen löschen.
 
 OPFS und Web Locks müssen im Browser verfügbar sein. Ein zentraler Worker hält die Datenbank exklusiv; ein zweiter Tab zeigt eine Sperrmeldung. Ohne OPFS erfolgt kein stiller Wechsel zu flüchtigem Speicher. Der Browser entscheidet über Speicherquota und die Gewährung dauerhafter Speicherung; die Einstellungen zeigen den Status und erlauben eine Persistenzanfrage.
 
-Bestehende Jazz-Daten bleiben unangetastet und können weiterhin explizit ausgewählt werden. „Jazz-Bestand in SQLite übernehmen“ ersetzt den früheren Schreibweg nach Jazz. Wiederholte Übernahmen desselben Kontostands erzeugen keine Duplikate. Das anonyme lokale Jazz-Konto erhält keinen Netzwerk-Sync; Anmeldung und geräteübergreifende Synchronisierung bleiben offen. Ansichten und kleine UI-Einstellungen bleiben mit `tlens-`-Fallback im Browser.
+Bestehende Jazz-Daten bleiben unangetastet. Jazz-Quellenauswahl, Konfiguration und Übernahme sind vorerst ausgeblendet; bereits nach SQLite übernommene Quellen bleiben nutzbar. Teilen, Anmeldung und geräteübergreifende Synchronisierung sind für später vorgesehen. Ansichten und kleine UI-Einstellungen bleiben mit `tlens-`-Fallback im Browser.
 
 Tabellen laden bis zu 100 Zeilen und zeigen Gesamtzahlen sowie Navigation; bis zu 20 Tabellen erscheinen pro Seite. Große Detailbäume laden ihre Kinder beim Öffnen. Timeline und Wertvorschläge sind ebenfalls seitenweise zugänglich. Die CSV-Ausgabe enthält weiterhin alle gefilterten Zeilen der gewählten Tabelle, nicht nur die aktuelle Seite. Große Exporte schreiben inkrementell in den Dateispeicherdialog; ohne diese Browser-API gilt eine Exportgrenze von 20 MiB. Einzelwerte, Tiefe und projizierte Zeilen haben explizite [Ressourcengrenzen](docs/data-architecture-decisions.md).
 
@@ -94,7 +94,7 @@ Die zusätzliche [Version mit Tag 2 am 8. September 2026](public/demo/weitklang-
 - Inventar für Logistik, Stromversorgung, Bühnen, Ton, Licht, Rigging und vollständige Instrumenten-/Backline-Sets der Bands
 - Eventdatensätze mit Verantwortlichen, vollständigen zugeordneten Personen und Equipment-Objekten, Arbeitsschritten mit IDs und Event-Abhängigkeiten
 
-Über **Festival-Datensatz laden** im leeren Workspace oder in der Quellenauswahl öffnen. Alternativ die JSON-Datei herunterladen und über den Dateiimport laden. Es wird nichts automatisch beim Start geladen. Die Daten sind mit `node scripts/generate-festival.mjs` reproduzierbar. Die IDs der katalogisierten Ressourcen bleiben auch in den eingebetteten Eventdaten erhalten.
+Die JSON-Datei über den regulären Dateiimport oder Drag & Drop laden. Eine eigene Demo-Ladeaktion gibt es in der Oberfläche nicht. Es wird nichts automatisch beim Start geladen. Die Daten sind mit `node scripts/generate-festival.mjs` reproduzierbar. Die IDs der katalogisierten Ressourcen bleiben auch in den eingebetteten Eventdaten erhalten.
 
 ## Stack und Deployment
 
@@ -135,3 +135,11 @@ Arrays aus Objekten werden als Tabellen interpretiert. Der Zeitstrahl verwendet 
 ## Lizenzen
 
 Projekt: MIT (siehe LICENSE). Heroicons: MIT. Die verwendeten Open-Source-Pakete behalten ihre jeweiligen Lizenzen; npm installiert die zugehörigen Lizenzdateien. Keine Stockbilder oder proprietären Designressourcen.
+
+### Importierte Daten löschen
+
+In der Detailansicht einer Tabellenzeile entfernt **Datensatz löschen** diese Zeile einschließlich ihrer verschachtelten Daten. In Einstellungen → Datenquellen entfernt **Ausgewählte Quelle löschen** einen gesamten Import; **Alle importierten Daten löschen** setzt den SQLite-Datenbestand einschließlich Importhistorie und Migrationsmarkierungen zurück und gibt Datenbankplatz frei. Jede Aktion verlangt eine Bestätigung. Jazz-Originaldaten, Originaldateien und Anzeigeeinstellungen bleiben erhalten. Die technische Jazz-Übernahme bleibt erhalten, ist derzeit aber nicht in der Oberfläche zugänglich.
+
+Im Quellenauswahlmenü löscht der Papierkorb ganz rechts den jeweiligen Import nach Bestätigung. Beim Löschen einer anderen Quelle bleibt die aktuelle Auswahl erhalten.
+
+Der Header zeigt weder einen Prototyp-Hinweis noch eine Benutzerattrappe.

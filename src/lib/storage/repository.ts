@@ -357,6 +357,7 @@ export class Repository {
     input: { id: string; generation: string; name: string; format: string },
     bytes: number,
     fingerprint?: string,
+    allowEmpty = false,
   ): Dataset {
     const { id, generation, name, format } = input;
     const names = (where: string) =>
@@ -376,7 +377,7 @@ export class Repository {
         generation,
       ]),
     );
-    if (!count) throw new Error("Keine Tabellen gefunden / No tables found.");
+    if (!count && !allowEmpty) throw new Error("Keine Tabellen gefunden / No tables found.");
     const mapping = detectTimeColumns(columns);
     const timeline = Boolean(
       this.db.selectValue(
@@ -406,7 +407,7 @@ export class Repository {
       "SELECT generation FROM datasets WHERE id=?",
       [id],
     );
-    this.db.transaction(() => {
+    this.db.savepoint(() => {
       if (fingerprint)
         this.db.exec({
           sql: "INSERT INTO migrations VALUES(?,?)",
@@ -421,7 +422,7 @@ export class Repository {
         bind: [bytes, count, generation],
       });
     });
-    if (old) {
+    if (old && old !== generation) {
       try {
         this.clean(String(old));
       } catch {
@@ -473,6 +474,30 @@ export class Repository {
     } catch {
       /* Retry invisible data cleanup on restart. */
     }
+  }
+  deleteRecord(id: string, generation: string, record: number) {
+    const data = this.dataset(id);
+    if (data.generation !== generation) throw new Error("Quelle wurde geändert / Source has changed.");
+    this.db.transaction(() => {
+      if (!this.db.selectValue("SELECT 1 FROM records WHERE generation=? AND id=?", [generation, record]))
+        throw new Error("Datensatz nicht gefunden / Record not found.");
+      this.db.exec({ sql: "DELETE FROM fields WHERE generation=? AND record=?", bind: [generation, record] });
+      this.db.exec({ sql: "DELETE FROM records WHERE generation=? AND id=?", bind: [generation, record] });
+      this.db.exec({
+        sql: "WITH RECURSIVE subtree(id) AS (SELECT ? UNION ALL SELECT e.id FROM subtree s CROSS JOIN entities e ON e.parent=s.id WHERE e.generation=?) DELETE FROM entities WHERE generation=? AND id IN (SELECT id FROM subtree)",
+        bind: [record, generation, generation],
+      });
+      const bytes = Number(this.db.selectValue("SELECT bytes FROM imports WHERE id=?", [generation]));
+      this.complete(data, bytes, undefined, true);
+    });
+  }
+  deleteAll() {
+    // Commit visibility first; crash recovery can reclaim remaining inactive generations.
+    this.db.transaction(() => {
+      this.db.exec("DELETE FROM datasets; DELETE FROM migrations;");
+    });
+    for (const generation of this.db.selectValues("SELECT id FROM imports")) this.clean(String(generation));
+    this.db.exec("DELETE FROM imports; VACUUM;");
   }
   where(q: Query) {
     const generation = this.dataset(q.dataset).generation;

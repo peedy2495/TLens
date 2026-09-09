@@ -86,3 +86,37 @@ it("loads only one level of normalized record children at a time", async () => {
     repo.close();
   }
 });
+it("deletes individual records atomically, refreshes metadata and resets all imported data", async () => {
+  const sqlite = await sqlite3InitModule();
+  const repo = new Repository(new sqlite.oo1.DB(":memory:"), sqlite);
+  try {
+    const input = repo.begin("Records", "json");
+    for (const id of [1, 2]) repo.add(input.generation, {
+      id, parent: null, position: id, name: String(id), kind: "value",
+      value: JSON.stringify(id === 1 ? { Unique: "remove", Nested: { ID: 1 } } : { Keep: "002" }),
+      path: ["Rows"], tablePath: ["Rows"],
+    });
+    repo.projectBatch(input.generation, 0);
+    const data = repo.complete(input, 100, "legacy-fingerprint");
+    expect(() => repo.deleteRecord(data.id, "stale-generation", 1)).toThrow("changed");
+    expect(repo.dataset(data.id).count).toBe(2);
+    // Metadata failure must roll back the record and hierarchy deletion too.
+    repo.db.exec("CREATE TRIGGER fail_delete_metadata BEFORE UPDATE ON datasets BEGIN SELECT RAISE(ABORT, 'test failure'); END;");
+    expect(() => repo.deleteRecord(data.id, data.generation, 1)).toThrow();
+    expect(repo.children(data.id, 1, [], 0).entries).toHaveLength(2);
+    repo.db.exec("DROP TRIGGER fail_delete_metadata;");
+    repo.deleteRecord(data.id, data.generation, 1);
+    expect(repo.dataset(data.id)).toMatchObject({ count: 1, columns: ["Keep"], paths: 1 });
+    expect(repo.db.selectValue("SELECT count(*) FROM entities WHERE id=1")).toBe(0);
+    expect(repo.db.selectValue("SELECT count(*) FROM fields WHERE record=1")).toBe(0);
+    expect(repo.children(data.id, 2, [], 0).entries[0].value).toBe("002");
+    repo.deleteRecord(data.id, data.generation, 2);
+    expect(repo.dataset(data.id)).toMatchObject({ count: 0, columns: [], paths: 0, timeline: false });
+    repo.deleteAll();
+    for (const table of ["datasets", "imports", "entities", "records", "fields", "migrations"])
+      expect(repo.db.selectValue(`SELECT count(*) FROM ${table}`)).toBe(0);
+    repo.recover();
+    expect(repo.list()).toEqual([]);
+    expect(repo.begin("New import", "csv").id).toBeTruthy();
+  } finally { repo.close(); }
+});

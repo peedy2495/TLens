@@ -233,30 +233,6 @@ button.primary:hover {
   font-weight: 450;
   color: var(--muted);
 }
-.top-right {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-.prototype {
-  font-size: 11px;
-  letter-spacing: 0.4px;
-  border: 1px solid var(--line);
-  padding: 5px 9px;
-  border-radius: 6px;
-  color: var(--muted);
-}
-.avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--purple);
-  color: var(--purple-text);
-  font-size: 11px;
-  font-weight: 650;
-}
 main {
   max-width: 1320px;
   margin: auto;
@@ -1326,3 +1302,30 @@ footer > span {
 .import-progress { background: var(--soft); border-radius: 1rem; }
 .data-pagination button, .import-progress button { border: 1px solid var(--line); border-radius: .65rem; padding: .3rem .7rem; }
 .data-pagination button:disabled { opacity: .4; }
+
+.source-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+.source-option .source-select {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  border-color: transparent;
+}
+.source-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-select small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+.source-select > svg:last-child:not(:first-child) { margin-left: auto; }
+.source-option .source-delete { flex: 0 0 auto; margin-left: auto; }
+.source-delete:hover:not(:disabled) { color: #ef4444; }

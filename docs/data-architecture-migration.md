@@ -19,7 +19,7 @@ Die ursprüngliche Bestandsaufnahme und die Etappen unten beschreiben den Ausgan
 
 ## Grundlage und Ausgangslage
 
-Die neuen Vorgaben liegen im geprüften Workspace unter [`.agents/skills/data-ingestion-architecture`](../.agents/skills/data-ingestion-architecture/SKILL.md), einschließlich der Referenzen und Kompatibilitätsmatrix. Ein Verzeichnis `./.skills` existiert hier derzeit nicht. Die bisherigen Produktanforderungen in [AGENTS.md](../AGENTS.md) bleiben die Verhaltensbaseline; ausdrücklich geplante Architekturänderungen werden schrittweise umgesetzt.
+Die neuen Vorgaben liegen im geprüften Workspace unter [`.agents/skills/data-ingestion-architecture`](../.agents/skills/data-ingestion-architecture/SKILL.md), einschließlich der Referenzen und Kompatibilitätsmatrix. Ein Verzeichnis `./.skills` existiert hier derzeit nicht. Die bisherigen Produktanforderungen in [.agents/AGENTS.md](../.agents/AGENTS.md) bleiben die Verhaltensbaseline; ausdrücklich geplante Architekturänderungen werden schrittweise umgesetzt.
 
 | Bereich | Im Code vorhanden | Erforderliche Änderung |
 | --- | --- | --- |
@@ -126,6 +126,6 @@ Ingestion-/Query-Service im Worker
 
 Kritischer Pfad: **0 → 1 → 2 → 3 → 4 → 5 → 6**. Etappe 7 folgt auf dem stabilen Vertrag und ist keine Voraussetzung für große lokale XML-Dateien. Parser-Spikes können früher stattfinden; die allgemeine Großdateifreigabe bleibt an den gesamten Datenpfad gebunden.
 
-Jede Etappe wird in reviewbare Änderungen mit eigenen Abnahmekriterien zerlegt. Relevante Tests laufen mit `npm test`, Anwendungsänderungen zusätzlich mit `npm run build` unter Node.js 22. Browserprüfungen sind für OPFS, Worker, Streaming, Downloads und Wiederanlauf erforderlich. README, Root-AGENTS und strukturierte Architekturvorgaben werden zusammen gepflegt, wobei Ziel und implementierter Stand getrennt bleiben.
+Jede Etappe wird in reviewbare Änderungen mit eigenen Abnahmekriterien zerlegt. Relevante Tests laufen mit `npm test`, Anwendungsänderungen zusätzlich mit `npm run build` unter Node.js 22. Browserprüfungen sind für OPFS, Worker, Streaming, Downloads und Wiederanlauf erforderlich. README, .agents/AGENTS.md und strukturierte Architekturvorgaben werden zusammen gepflegt, wobei Ziel und implementierter Stand getrennt bleiben.
 
 **Nächste Freigaben:** Weitere Zielbrowser prüfen und produktive Datenbankquellen konfigurieren; zusätzliche Importmodi erst nach Festlegung von Schlüsseln und Konfliktregeln ergänzen.

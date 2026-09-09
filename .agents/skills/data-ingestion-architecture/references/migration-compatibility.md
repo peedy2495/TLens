@@ -31,4 +31,4 @@ Internal persistence changes must not be allowed to silently alter:
 - product naming/design requirements
 
 When a migration requires changed behavior, document the change explicitly in
-README/root AGENTS and tests.
+README/.agents requirements and tests.

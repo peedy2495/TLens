@@ -6,8 +6,8 @@
 - All other content and the original demo remain unchanged.
 - This variant must be imported explicitly.
 - It does not automatically track today's date.
-- Load the fictional festival dataset explicitly through the source selector or
-  empty-workspace action.
+- No dedicated demo-loading action is shown in the UI. Import generated JSON
+  through the regular file picker or drag-and-drop. Preserve the generator.
 - Regenerate the main demo with:
 
 ```bash

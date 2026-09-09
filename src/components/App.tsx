@@ -31,6 +31,7 @@ import {
   Squares2X2Icon,
   StarIcon,
   SunIcon,
+  TrashIcon,
   XMarkIcon,
   ArrowsUpDownIcon,
 } from "@heroicons/react/24/outline";
@@ -100,6 +101,7 @@ function WorkspaceApp() {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [working, setWorking] = useState(false);
+  const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
   const [remoteToken, setRemoteToken] = useState("");
@@ -119,7 +121,7 @@ function WorkspaceApp() {
   const [timeColumnsBySource, setTimeColumnsBySource] = useState<
     Record<string, { start: string; end: string }>
   >({});
-  const [dbName, setDbName] = useState(() =>
+  const [dbName] = useState(() =>
     readStored("dlens-db", "Festival Workspace"),
   );
   const [query, setQuery] = useState("");
@@ -223,6 +225,56 @@ function WorkspaceApp() {
   useEffect(() => {
     if (settings && storageReady && storage.current) void storage.current.request<{ databaseBytes: number; quota?: number; usage?: number; persisted: boolean }>({ type: "storage" }).then(setStorageStats).catch(() => {});
   }, [settings, storageReady]);
+  async function deleteImported(mode: "record" | "source" | "all", target = selectedDataset) {
+    if (!storage.current || working) return;
+    const message = mode === "all"
+      ? t("Alle importierten Daten endgültig löschen? Originaldaten und Einstellungen bleiben erhalten.", "Permanently delete all imported data? Original data and preferences are preserved.")
+      : mode === "source"
+        ? t(`Quelle „${target?.name}“ mit allen Datensätzen endgültig löschen?`, `Permanently delete source “${target?.name}” and all its records?`)
+        : t("Diesen Datensatz einschließlich seiner verschachtelten Daten endgültig löschen?", "Permanently delete this record including its nested data?");
+    if (!window.confirm(message)) return;
+    setWorking(true);
+    try {
+      const request = mode === "all" ? { type: "delete-all" as const }
+        : mode === "source" ? { type: "delete" as const, dataset: target!.id }
+        : { type: "delete-record" as const, dataset: detail!.dataset!, generation: selectedDataset!.generation, record: detail!.record! };
+      setFiles(await storage.current.request<Dataset[]>(request));
+      if (mode !== "source" || target?.id === source) {
+        setDetail(null); setResult(null); setPages({}); setPathPage(0); setTimelinePage(0); setValuePage(0);
+        if (mode !== "record") setSource("");
+      }
+      setRevision((value) => value + 1);
+      setNotice(t("Importierte Daten gelöscht.", "Imported data deleted."));
+      setStorageStats(await storage.current.request({ type: "storage" }));
+    } catch (error) {
+      setNotice(String(error));
+      // A reset may have committed before physical space reclamation failed.
+      const remaining = await storage.current.request<Dataset[]>({ type: "list" }).catch(() => null);
+      if (remaining) {
+        setFiles(remaining);
+        if (!remaining.some((item) => item.id === source)) { setSource(""); setDetail(null); setResult(null); }
+      }
+    }
+    finally { setWorking(false); }
+  }
+  function sourceOption(file: Dataset) {
+    const database = ["jazz", "api"].includes(file.format);
+    const deleteLabel = t(`Quelle „${file.name}“ löschen`, `Delete source “${file.name}”`);
+    return <div className="source-option" key={file.id}>
+      <button className="source-select" onClick={() => {
+        setResult(null); setSource(file.id); setColumns(file.scalarColumns);
+        setFilters([]); setQuery(""); setPanel("");
+      }}>
+        {database ? <CircleStackIcon /> : <DocumentChartBarIcon />}
+        <span className="source-name">{file.name}</span>
+        {database && <small>SQLite · {t("lokale Kopie", "local copy")}</small>}
+        {source === file.id && <CheckIcon />}
+      </button>
+      <button className="source-delete icon-button" disabled={working} title={deleteLabel} aria-label={deleteLabel} onClick={() => void deleteImported("source", file)}>
+        <TrashIcon />
+      </button>
+    </div>;
+  }
   const queryKey = JSON.stringify(queryRequest);
   useEffect(() => {
     if (!selectedDataset || !storage.current) { setResult(null); return; }
@@ -234,7 +286,7 @@ function WorkspaceApp() {
       }).catch((error) => { if (!cancelled) { setNotice(String(error)); setLoading(false); } });
     }, 150);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [queryKey, selectedDataset?.generation]);
+  }, [queryKey, selectedDataset?.generation, revision]);
   useEffect(() => { setPages({}); setTimelinePage(0); setPathPage(0); }, [source, query, JSON.stringify(filters), JSON.stringify(tableSorts), selectedDate]);
   useEffect(() => { setDetail(null); }, [source, selectedDataset?.generation]);
   useEffect(() => { setValuePage(0); }, [filterColumn, filterValue]);
@@ -309,35 +361,6 @@ function WorkspaceApp() {
       setNotice(t("Remote-Daten lokal gespeichert", "Remote data stored locally"));
     } catch (error) { setNotice(String(error)); } finally { setRemoteToken(""); setWorking(false); setProgress(null); }
   }
-  async function migrateJazz() {
-    if (!me.$isLoaded || !storage.current || working) return;
-    try {
-      setWorking(true);
-      const dataset = await storage.current.request<Dataset>({ type: "jazz", data: me.root.data, account: me.$jazz.id, name: dbName });
-      setFiles((previous) => [...previous.filter((f) => f.id !== dataset.id), dataset]);
-      setResult(null); setSource(dataset.id); setColumns(dataset.scalarColumns); setFilters([]); setQuery("");
-      setNotice(t("Jazz-Daten in SQLite übernommen. Original bleibt erhalten.", "Jazz data migrated to SQLite. Original preserved."));
-    } catch (error) { setNotice(String(error)); } finally { setWorking(false); }
-  }
-  async function loadFestival() {
-    try {
-      const response = await fetch("/demo/weitklang-festival-2027.json");
-      if (!response.ok)
-        throw new Error(
-          t(
-            "Festivaldatei konnte nicht geladen werden.",
-            "Could not load festival file.",
-          ),
-        );
-      await importFile(
-        new File([await response.text()], "weitklang-festival-2027.json", {
-          type: "application/json",
-        }),
-      );
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
-    }
-  }
   function download() {
     if (selectedDataset && storage.current) {
       void runExport("json"); return;
@@ -383,10 +406,6 @@ function WorkspaceApp() {
           <span className="brand-divider" />
           <span className="workspace-label">Data Explorer</span>
         </a>
-        <div className="top-right">
-          <span className="prototype">{t("Prototyp", "Prototype")}</span>
-          <span className="avatar">DL</span>
-        </div>
       </header>
       <main>
         <div className="page-heading">
@@ -497,47 +516,14 @@ function WorkspaceApp() {
           {panel === "sources" && (
             <div className="inline-panel sources">
               <div className="panel-label">{t("DATEIEN", "FILES")}</div>
-              {files.filter((file) => !["jazz", "api"].includes(file.format)).map((file) => (
-                <button
-                  key={file.id}
-                  onClick={() => {
-                    setResult(null); setSource(file.id);
-                    setFilters([]);
-                    setQuery("");
-                    setColumns(file.scalarColumns);
-                    setPanel("");
-                  }}
-                >
-                  <DocumentChartBarIcon />
-                  {file.name}
-                  {source === file.id && <CheckIcon />}
-                </button>
-              ))}
+              {files.filter((file) => !["jazz", "api"].includes(file.format)).map(sourceOption)}
               <button onClick={() => fileInput.current?.click()}>
                 <PlusIcon />
                 {t("Datei importieren", "Import file")}
                 <small>JSON / YAML / CSV / XML</small>
               </button>
-              <button onClick={() => void loadFestival()}>
-                <CalendarDaysIcon />
-                {t("Festival-Datensatz laden", "Load festival dataset")}
-                <small>16.–21.06.2027</small>
-              </button>
               <div className="panel-label">{t("DATENBANKEN / API", "DATABASES / API")}</div>
-              {files.filter((file) => ["jazz", "api"].includes(file.format)).map((file) => <button key={file.id} onClick={() => { setResult(null); setSource(file.id); setColumns(file.scalarColumns); setFilters([]); setQuery(""); setPanel(""); }}><CircleStackIcon />{file.name}<small>SQLite · {t("lokale Kopie", "local copy")}</small>{source === file.id && <CheckIcon />}</button>)}
-              <button
-                onClick={() => {
-                  setResult(null); setSource("jazz");
-                  setColumns(initialColumns);
-                  setFilters([]);
-                  setQuery("");
-                  setPanel("");
-                }}
-              >
-                <CircleStackIcon />
-                {dbName}
-                <small>Jazz · {t("lokal", "local")}</small>
-              </button>
+              {files.filter((file) => ["jazz", "api"].includes(file.format)).map(sourceOption)}
               <p>
                 MariaDB, PostgreSQL ·{" "}
                 {t("über Connector-Backend", "via connector backend")}
@@ -1242,10 +1228,10 @@ function WorkspaceApp() {
               {t(
                 source
                   ? "Passe deine Suche oder Filter an."
-                  : "Ziehe eine JSON-, YAML-, CSV- oder XML-Datei hierher, öffne eine Datei oder lade den Festival-Datensatz.",
+                  : "Ziehe eine JSON-, YAML-, CSV- oder XML-Datei hierher oder öffne eine Datei.",
                 source
                   ? "Adjust your search or filters."
-                  : "Drop a JSON, YAML, CSV or XML file here, open a file or load the festival dataset.",
+                  : "Drop a JSON, YAML, CSV or XML file here or open a file.",
               )}
             </p>
             <button
@@ -1262,10 +1248,6 @@ function WorkspaceApp() {
                 <button onClick={() => fileInput.current?.click()}>
                   <FolderIcon />
                   {t("Datei öffnen", "Open file")}
-                </button>
-                <button className="primary" onClick={() => void loadFestival()}>
-                  <CalendarDaysIcon />
-                  {t("Festival-Datensatz laden", "Load festival dataset")}
                 </button>
               </div>
             )}
@@ -1306,6 +1288,7 @@ function WorkspaceApp() {
               </Dialog.Close>
             </div>
             <Dialog.Description>{detail?.path.join(" › ")}</Dialog.Description>
+            {detail?.dataset && detail.record !== undefined && <button disabled={working} onClick={() => void deleteImported("record")}>{t("Datensatz löschen", "Delete record")}</button>}
             {detail && (detail.dataset && detail.record !== undefined && storage.current ? <StoredRecordTree client={storage.current} dataset={detail.dataset} record={detail.record} language={language} /> : <RecordTree value={detail.row} />)}
           </Dialog.Popup>
         </Dialog.Portal>
@@ -1430,27 +1413,8 @@ function WorkspaceApp() {
             {storageStats && <p>{t("Datenbank", "Database")}: {(storageStats.databaseBytes / 2 ** 20).toFixed(1)} MiB · {t("Geschätzter freier Browserspeicher", "Estimated available browser storage")}: {storageStats.quota ? ((storageStats.quota - (storageStats.usage ?? 0)) / 2 ** 30).toFixed(1) + " GiB" : "—"} · {storageStats.persisted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Speicherung unterliegt Browserbereinigung", "Storage subject to browser eviction")}</p>}
             <p>{t("Importierte Dateien bleiben lokal in diesem Browser gespeichert. Die Originaldatei wird nicht zusätzlich kopiert.", "Imported files persist locally in this browser. Original files are not duplicated.")}</p>
             <button onClick={() => { void navigator.storage?.persist().then((granted) => setNotice(granted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Browser hat dauerhaften Speicher nicht gewährt", "Browser did not grant persistent storage"))); }}>{t("Dauerhaften Browserspeicher anfragen", "Request persistent browser storage")}</button>
-            {selectedDataset && <button onClick={async () => { if (!storage.current || working) return; try { setFiles(await storage.current.request<Dataset[]>({ type: "delete", dataset: source })); setSource(""); setResult(null); } catch (error) { setNotice(String(error)); } }}>{t("Ausgewählten SQLite-Datensatz löschen", "Delete selected SQLite dataset")}</button>}
-            <div className="settings-divider" />
-            <h3>
-              <CircleStackIcon />
-              {t("Jazz-Datenquelle", "Jazz data source")}
-            </h3>
-            <label>
-              {t("Name der Datenbank", "Database name")}
-              <input
-                value={dbName}
-                onChange={(e) => setDbName(e.target.value)}
-                maxLength={80}
-              />
-            </label>
-            <div className="info-box">
-              {t(
-                "Jazz speichert deine Daten lokal in diesem Browser. Geräteübergreifender Sync und Anmeldung sind im Prototyp noch nicht eingerichtet.",
-                "Jazz stores your data locally in this browser. Cross-device sync and sign-in are not configured in this prototype.",
-              )}
-            </div>
-            <button disabled={!me.$isLoaded || working} onClick={() => void migrateJazz()}>{t("Jazz-Bestand in SQLite übernehmen", "Migrate Jazz data to SQLite")}</button>
+            {selectedDataset && <button disabled={working} onClick={() => void deleteImported("source")}>{t("Ausgewählte Quelle löschen", "Delete selected source")}</button>}
+            <button disabled={!storageReady || working || !files.length} onClick={() => void deleteImported("all")}>{t("Alle importierten Daten löschen", "Delete all imported data")}</button>
             <p className="subtle">
               MariaDB · PostgreSQL —{" "}
               {t(

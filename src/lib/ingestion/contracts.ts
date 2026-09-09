@@ -136,6 +136,8 @@ export type Request =
       csv: CsvOptions;
     }
   | { type: "delete"; dataset: string }
+  | { type: "delete-record"; dataset: string; generation: string; record: number }
+  | { type: "delete-all" }
   | { type: "storage" };
 export class SourceError extends Error {
   constructor(
