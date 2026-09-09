@@ -190,6 +190,30 @@ try {
   assert.equal(await page.$$eval(".sources button", (buttons) => buttons.filter((b) => /browser-|API ·/.test(b.textContent)).length), 0);
   await (await page.$("input[type=file]")).uploadFile(root + "/" + name);
   await page.waitForFunction(() => document.querySelectorAll("tbody tr").length === 2);
+  await (await page.$("input[type=file]")).uploadFile(resolve("src/lib/ingestion/fixtures/win10vm.yaml"));
+  await page.waitForFunction(() => document.querySelector(".source-button")?.textContent.includes("win10vm.yaml"), { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelectorAll("tbody tr").length > 0);
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  await (await page.$("input[type=file]")).uploadFile(resolve("src/lib/ingestion/fixtures/win10vm.kyaml"));
+  await page.waitForFunction(() => document.querySelector(".source-button")?.textContent.includes("win10vm.kyaml"), { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector("tbody")?.textContent.includes("VirtualMachineInstance"));
+  assert.equal(await page.$$eval("tbody tr", (rows) => rows.length), 1);
+  const largeRecord = root + "/limit-record.json";
+  await writeFile(largeRecord, JSON.stringify([{ ID: "large-record", Items: Array(31000).fill(0) }]));
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  await (await page.$("input[type=file]")).uploadFile(largeRecord);
+  await page.waitForSelector(".import-warning");
+  assert.equal(await page.$$eval(".import-warning button", (buttons) => buttons.length), 2);
+  await clickText("Fortsetzen");
+  await page.waitForFunction(() => document.querySelector(".import-warning")?.textContent.includes("20.000"));
+  await clickText("Fortsetzen und für diesen Import nicht erneut fragen");
+  await page.waitForFunction(() => document.querySelector("tbody")?.textContent.includes("large-record"));
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  await (await page.$("input[type=file]")).uploadFile(largeRecord);
+  await page.waitForSelector(".import-warning");
+  await clickText("Import abbrechen");
+  await page.waitForSelector("input[type=file]:not(:disabled)");
+  assert.match(await page.$eval("tbody", (el) => el.textContent), /large-record/);
   console.log(
     "PASS: UI XML import, OPFS reload, source selection, exclusive tab ownership, cancellation, authenticated HTTP connector, deletion confirmation, record/source deletion, reset, reimport and backend access controls",
   );

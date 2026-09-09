@@ -43,3 +43,5 @@ CSV wird an logischen Datensatzgrenzen verarbeitet und verwendet den bisherigen 
 ## Separates Connector-Backend
 
 PostgreSQL 16 und MariaDB 11 wurden mit isolierten Testcontainern geprüft. Der Server verwendet Cursor/Streams, reine Lesekonten, freigegebene Tabellennamen und Bearer-Authentifizierung. Datenbank-Zugangsdaten bleiben ausschließlich serverseitig; das Browser-Zugriffstoken wird nach dem Import verworfen. Treiberreferenzen: [node-postgres](https://node-postgres.com/features/queries), [mysql2](https://sidorares.github.io/node-mysql2/docs/documentation).
+
+Die bisherigen 2-MiB-/10.000-Knoten-Grenzen bei der Datensatzprojektion sind im interaktiven Import bestätigbare Intervalle. Der Worker wartet außerhalb einer Transaktion auf die Antwort und wiederholt den zurückgerollten Projektionsbatch mit der nächsten Schwelle. Ab dem zweiten Intervall ist das Abschalten weiterer Warnungen für den aktuellen Import möglich. Ohne Bestätigungshandler bleibt die erste Grenze verbindlich.

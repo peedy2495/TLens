@@ -3,6 +3,8 @@ import { parseAllDocuments } from "yaml";
 import { createParser } from "./parsers";
 import {
   formatFor,
+  RecordLimit,
+  type ConfirmImport,
   limits,
   type Dataset,
   type Progress,
@@ -20,6 +22,7 @@ export async function ingest(
   signal: AbortSignal,
   progress: (p: Progress) => void,
   replace?: string,
+  confirm?: ConfirmImport,
 ) {
   const format = formatFor(file);
   if (format === "yaml" && file.size > limits.yamlBytes)
@@ -34,6 +37,7 @@ export async function ingest(
     progress,
     (sink) => createParser(format, sink, csv),
     replace,
+    confirm,
   );
 }
 export async function ingestConnector(
@@ -46,7 +50,9 @@ export async function ingestConnector(
   progress: (p: Progress) => void,
   makeParser: (sink: EntitySink) => Parser,
   replace?: string,
+  confirm?: ConfirmImport,
 ) {
+  const project = projectionWithWarnings(repository, signal, confirm);
   const input = repository.begin(name, format, replace);
   let bytes = 0,
     records = 0,
@@ -90,7 +96,7 @@ export async function ingestConnector(
     let after = 0;
     for (;;) {
       signal.throwIfAborted();
-      const result = repository.projectBatch(input.generation, after);
+      const result = await project(input.generation, after);
       after = result.after;
       records += result.count;
       if (performance.now() - lastProgress > 150) {
@@ -119,13 +125,14 @@ export async function ingestConnector(
 
 export async function ingestYamlDocuments(
   repository: Repository, file: File, csv: CsvOptions, signal: AbortSignal,
-  progress: (p: Progress) => void, language: "de" | "en" = "de",
+  progress: (p: Progress) => void, language: "de" | "en" = "de", confirm?: ConfirmImport,
 ) {
   if (file.size > limits.yamlBytes) throw new Error("YAML: Maximal 5 MB / Maximum 5 MB.");
   const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
   signal.throwIfAborted();
   const documents = parseAllDocuments(text, { uniqueKeys: true });
   if (!documents.length || documents.length > 1000) throw new Error("YAML: 1–1000 Dokumente / documents required.");
+  const project = projectionWithWarnings(repository, signal, confirm);
   const previous = repository.list().filter((data) => data.format === "yaml" &&
     (data.sourceFile === file.name || (!data.sourceFile && data.name === file.name)));
   const staged: ReturnType<Repository["begin"]>[] = [];
@@ -138,7 +145,7 @@ export async function ingestYamlDocuments(
       const value = document.toJS({ maxAliasCount: 50 });
       const part = index + 1;
       const old = previous.find((data) => (data.part ?? 1) === part);
-      const input = repository.begin(`${file.name} · ${language === "de" ? "Teil" : "Part"} ${part}`, "yaml", old?.id);
+      const input = repository.begin(documents.length > 1 ? `${file.name} · ${language === "de" ? "Teil" : "Part"} ${part}` : file.name, "yaml", old?.id);
       staged.push(input);
       const parser = createParser("json", {
         add: (entity) => repository.add(input.generation, entity),
@@ -152,7 +159,7 @@ export async function ingestYamlDocuments(
       let after = 0;
       for (;;) {
         signal.throwIfAborted();
-        const batch = repository.projectBatch(input.generation, after);
+        const batch = await project(input.generation, after);
         records += batch.count;
         after = batch.after;
         if (!batch.count) break;
@@ -180,4 +187,21 @@ export async function ingestYamlDocuments(
     for (const input of staged) repository.fail(input.generation, signal.aborted ? "cancelled" : "error", String(error));
     throw error;
   }
+}
+
+export function projectionWithWarnings(repository: Repository, signal: AbortSignal, confirm?: ConfirmImport) {
+  let interval = 1;
+  return async (generation: string, after: number) => {
+    for (;;) {
+      signal.throwIfAborted();
+      try { return repository.projectBatch(generation, after, { bytes: limits.rowBytes * interval, nodes: 10000 * interval }); }
+      catch (error) {
+        if (!(error instanceof RecordLimit) || !confirm) throw error;
+        const decision = await confirm({ interval, bytes: limits.rowBytes * interval, nodes: 10000 * interval });
+        signal.throwIfAborted();
+        if (decision === "cancel") throw new Error("Abgebrochen / Cancelled");
+        interval = decision === "ignore" && interval >= 2 ? Infinity : interval + 1;
+      }
+    }
+  };
 }

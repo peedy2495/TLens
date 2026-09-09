@@ -178,3 +178,10 @@ export function formatFor(file: { name: string; type?: string }): Format {
     "Nicht unterstütztes Dateiformat / Unsupported format: JSON, YAML, YML, KYAML, CSV, XML.",
   );
 }
+
+export interface ImportWarning { interval: number; bytes: number; nodes: number; }
+export type ImportDecision = "continue" | "cancel" | "ignore";
+export type ConfirmImport = (warning: ImportWarning) => Promise<ImportDecision>;
+export class RecordLimit extends Error {
+  constructor() { super("Datensatz zu groß / Record exceeds import threshold."); }
+}

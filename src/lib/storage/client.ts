@@ -1,4 +1,4 @@
-import type { Progress, Request } from "../ingestion/contracts";
+import type { Progress, Request, ConfirmImport } from "../ingestion/contracts";
 export class StorageClient {
   private worker: Worker;
   private queue: Promise<unknown> = Promise.resolve();
@@ -9,6 +9,7 @@ export class StorageClient {
       reject: (error: Error) => void;
       failure?: Error;
       progress?: (p: Progress) => void;
+      confirm?: ConfirmImport;
       chunk?: (chunk: string) => Promise<void>;
     }
   >();
@@ -23,6 +24,12 @@ export class StorageClient {
     this.worker.onmessage = async ({ data }) => {
       const call = this.callbacks.get(data.id);
       if (!call) return;
+      if (data.warning) {
+        let decision: "continue" | "cancel" | "ignore" = "cancel";
+        try { decision = await call.confirm?.(data.warning) ?? "cancel"; } catch { /* Cancel on failed confirmation. */ }
+        if (this.callbacks.has(data.id)) this.worker.postMessage({ id: data.id, control: "limit", token: data.token, decision });
+        return;
+      }
       if (data.progress) {
         call.progress?.(data.progress);
         return;
@@ -59,6 +66,7 @@ export class StorageClient {
     options: {
       failure?: Error;
       progress?: (p: Progress) => void;
+      confirm?: ConfirmImport;
       chunk?: (chunk: string) => Promise<void>;
     } = {},
   ): Promise<T> {

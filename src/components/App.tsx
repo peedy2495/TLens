@@ -59,7 +59,7 @@ import { RecordTree } from "./RecordTree";
 import { DLensAccount } from "../lib/jazz";
 import { StorageClient } from "../lib/storage/client";
 import { downloadStorage } from "../lib/storage/download";
-import { formatFor, type Dataset, type Query, type QueryResult, type Progress, type PageTable } from "../lib/ingestion/contracts";
+import { formatFor, type ImportWarning, type ImportDecision, type Dataset, type Query, type QueryResult, type Progress, type PageTable } from "../lib/ingestion/contracts";
 
 const initialColumns = [
   "EventID",
@@ -99,6 +99,16 @@ function WorkspaceApp() {
   const [files, setFiles] = useState<Dataset[]>([]);
   const storage = useRef<StorageClient | null>(null);
   const [result, setResult] = useState<QueryResult | null>(null);
+  const [importWarning, setImportWarning] = useState<ImportWarning | null>(null);
+  const warningAnswer = useRef<((decision: ImportDecision) => void) | null>(null);
+  function answerWarning(decision: ImportDecision) {
+    warningAnswer.current?.(decision); warningAnswer.current = null; setImportWarning(null);
+  }
+  function confirmImport(warning: ImportWarning): Promise<ImportDecision> {
+    setImportWarning(warning);
+    return new Promise((resolve) => { warningAnswer.current = resolve; });
+  }
+  useEffect(() => () => { warningAnswer.current?.("cancel"); }, []);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [working, setWorking] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -345,7 +355,7 @@ function WorkspaceApp() {
       formatFor(file);
       if (!storage.current) throw new Error("Datenbank noch nicht bereit / Database not ready");
       setWorking(true); setProgress({ phase: "reading", bytes: 0, total: file.size, records: 0 });
-      const imported = await storage.current.request<Dataset | Dataset[]>({ type: "import", file, csv: csvOptions, language, replace: files.find((f) => f.name === file.name && f.format !== "jazz")?.id }, { progress: setProgress });
+      const imported = await storage.current.request<Dataset | Dataset[]>({ type: "import", file, csv: csvOptions, language, replace: files.find((f) => f.name === file.name && f.format !== "jazz")?.id }, { progress: setProgress, confirm: confirmImport });
       const datasets = Array.isArray(imported) ? imported : [imported];
       const dataset = datasets[0];
       setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
@@ -360,7 +370,7 @@ function WorkspaceApp() {
   async function importRemote() {
     if (!storage.current || working) return;
     try { setWorking(true); setProgress(null);
-      const dataset = await storage.current.request<Dataset>({ type: "remote", url: remoteUrl, token: remoteToken, name: "API · " + new URL(remoteUrl).hostname }, { progress: setProgress });
+      const dataset = await storage.current.request<Dataset>({ type: "remote", url: remoteUrl, token: remoteToken, name: "API · " + new URL(remoteUrl).hostname }, { progress: setProgress, confirm: confirmImport });
       setFiles((previous) => [...previous, dataset]); setResult(null); setSource(dataset.id); setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setSettings(false);
       setNotice(t("Remote-Daten lokal gespeichert", "Remote data stored locally"));
     } catch (error) { setNotice(String(error)); } finally { setRemoteToken(""); setWorking(false); setProgress(null); }
@@ -489,7 +499,7 @@ function WorkspaceApp() {
                 </small>
               </span>
               <span className="source-count">
-                {selectedDataset?.paths ?? tables.length} {t("Pfade", "paths")}
+                {selectedDataset?.paths ?? tables.length} {(selectedDataset?.paths ?? tables.length) === 1 ? t("Pfad", "path") : t("Pfade", "paths")}
               </span>
               <ChevronDownIcon />
             </button>
@@ -537,7 +547,7 @@ function WorkspaceApp() {
           {storageError && <p role="alert">{storageError}</p>}
           {working && <div className="import-progress" role="status">
             {progress ? `${progress.phase === "reading" ? t("Einlesen", "Reading") : t("Aufbereiten", "Indexing")}: ${(progress.bytes / 1000000).toFixed(1)}${progress.total ? ` / ${(progress.total / 1000000).toFixed(1)}` : ""} MB · ${progress.records} ${t("Datensätze gespeichert", "records stored")}` : t("Verarbeitung läuft …", "Processing …")}
-            <button onClick={() => storage.current?.cancel()}>{t("Abbrechen", "Cancel")}</button>
+            <button onClick={() => { answerWarning("cancel"); storage.current?.cancel(); }}>{t("Abbrechen", "Cancel")}</button>
           </div>}
           <div className="search-box">
             <MagnifyingGlassIcon />
@@ -1271,6 +1281,22 @@ function WorkspaceApp() {
           </span>
         </footer>
       </main>
+      <Dialog.Root open={importWarning !== null} onOpenChange={(open) => { if (!open) answerWarning("cancel"); }}>
+        <Dialog.Portal>
+          <Dialog.Backdrop className="dialog-backdrop" />
+          <Dialog.Popup className="dialog import-warning">
+            <Dialog.Title>{t("Großer Datensatz", "Large record")}</Dialog.Title>
+            <Dialog.Description>
+              {t("Ein Datensatz überschreitet", "A record exceeds")} {importWarning ? importWarning.bytes / 1048576 : 2} MiB {t("oder", "or")} {importWarning?.nodes.toLocaleString(language)} {t("Knoten. Fortsetzen kann viel Arbeitsspeicher benötigen. Beim Abbruch werden die Daten dieses Imports entfernt; der bisherige Bestand bleibt erhalten.", "nodes. Continuing may require substantial memory. Cancelling removes this import's data and preserves the previous dataset.")}
+            </Dialog.Description>
+            <div className="empty-actions">
+              <button onClick={() => answerWarning("cancel")}>{t("Import abbrechen", "Cancel import")}</button>
+              <button className="primary" onClick={() => answerWarning("continue")}>{t("Fortsetzen", "Continue")}</button>
+              {importWarning && importWarning.interval >= 2 && <button onClick={() => answerWarning("ignore")}>{t("Fortsetzen und für diesen Import nicht erneut fragen", "Continue without further warnings for this import")}</button>}
+            </div>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
       <Dialog.Root
         open={detail !== null}
         onOpenChange={(open) => {

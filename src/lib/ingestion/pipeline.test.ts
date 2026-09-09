@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import sqlite3InitModule, { type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { Repository } from "../storage/repository";
@@ -203,6 +204,62 @@ it("imports YAML documents atomically with stable numbered sources and language-
   const controller = new AbortController(); controller.abort();
   await expect(loadParts('rows: [{ID: "cancelled"}]', "de", controller.signal)).rejects.toThrow();
   const updated = await loadParts('rows: [{ID: "003"}]', "en");
-  expect(updated[0]).toMatchObject({ id: parts[0].id, name: "bundle.kyaml · Part 1", sourceFile: "bundle.kyaml", part: 1 });
+  expect(updated[0]).toMatchObject({ id: parts[0].id, name: "bundle.kyaml", sourceFile: "bundle.kyaml", part: 1 });
   expect(repo.list()).toHaveLength(1);
+});
+
+it("imports the supplied KubeVirt YAML example", async () => {
+  const repo = repository();
+  const text = readFileSync(new URL("./fixtures/win10vm.yaml", import.meta.url), "utf8");
+  const datasets = await ingestYamlDocuments(repo, new File([text], "win10vm.yaml"), defaultCsvOptions,
+    new AbortController().signal, () => {});
+  expect(datasets).toHaveLength(1);
+  expect(repo.query(query(datasets[0].id)).total).toBeGreaterThan(0);
+});
+
+it("shows object-only KYAML as one complete record", async () => {
+  const repo = repository();
+  const text = readFileSync(new URL("./fixtures/win10vm.kyaml", import.meta.url), "utf8");
+  const [data] = await ingestYamlDocuments(repo, new File([text], "win10vm.kyaml"), defaultCsvOptions,
+    new AbortController().signal, () => {});
+  expect(data).toMatchObject({ name: "win10vm.kyaml", count: 1, paths: 1 });
+  const result = repo.query(query(data.id));
+  expect(result.tables[0].rows).toEqual([JSON.parse(text)]);
+  expect(repo.query(query(data.id, { query: "iso-win10" })).total).toBe(1);
+});
+it("asks at successive node intervals and preserves the prior import on cancellation", async () => {
+  const repo = repository();
+  const old = await load(repo, '[{"ID":"original"}]', "large.json");
+  const input = new File([JSON.stringify([{ Items: Array(21000).fill(0) }])], "large.json");
+  const warnings: number[] = [];
+  await expect(ingest(repo, input, defaultCsvOptions, new AbortController().signal, () => {}, old.id,
+    async (warning) => { warnings.push(warning.interval); return warning.interval === 1 ? "continue" : "cancel"; })).rejects.toThrow("Cancelled");
+  expect(warnings).toEqual([1, 2]);
+  expect(repo.query(query(old.id)).tables[0].rows).toEqual([{ ID: "original" }]);
+  expect(repo.db.selectValue("SELECT count(*) FROM entities WHERE generation<>?", [old.generation])).toBe(0);
+  const accepted: number[] = [];
+  const result = await ingest(repo, input, defaultCsvOptions, new AbortController().signal, () => {}, old.id,
+    async (warning) => { accepted.push(warning.interval); return "continue"; });
+  expect(accepted).toEqual([1, 2]);
+  expect(result.count).toBe(1);
+});
+it("suppresses later warnings only for the current import after interval two", async () => {
+  const repo = repository();
+  const file = new File([JSON.stringify([{ Items: Array(31000).fill(0) }])], "nodes.json");
+  const warnings: number[] = [];
+  await ingest(repo, file, defaultCsvOptions, new AbortController().signal, () => {}, undefined,
+    async (warning) => { warnings.push(warning.interval); return warning.interval === 1 ? "continue" : "ignore"; });
+  expect(warnings).toEqual([1, 2]);
+  await expect(ingest(repo, file, defaultCsvOptions, new AbortController().signal, () => {}, undefined,
+    async (warning) => { expect(warning.interval).toBe(1); return "cancel"; })).rejects.toThrow("Cancelled");
+  expect(repo.list()).toHaveLength(1);
+});
+it("asks at byte intervals even when the node count is small", async () => {
+  const repo = repository();
+  const file = new File([JSON.stringify([{ Items: Array(5).fill("x".repeat(900000)) }])], "bytes.json");
+  const warnings: number[] = [];
+  const data = await ingest(repo, file, defaultCsvOptions, new AbortController().signal, () => {}, undefined,
+    async (warning) => { warnings.push(warning.interval); return "continue"; });
+  expect(warnings).toEqual([1, 2]);
+  expect(data.count).toBe(1);
 });

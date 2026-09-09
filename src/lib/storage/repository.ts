@@ -14,6 +14,7 @@ import {
 } from "../data";
 import {
   limits,
+  RecordLimit,
   type Dataset,
   type Entity,
   type Query,
@@ -205,30 +206,25 @@ export class Repository {
     generation: string,
     id: number,
     budget = { bytes: 0, nodes: 0 },
+    ceiling = { bytes: limits.rowBytes, nodes: 10000 },
   ): JsonValue {
     const node = this.db.selectObject(
       "SELECT * FROM entities WHERE generation=? AND id=?",
       [generation, id],
     );
     if (!node) throw new Error("Missing hierarchy node");
-    budget.bytes += String(node.value).length + String(node.name).length;
+    budget.bytes += encoder.encode(String(node.value)).length + encoder.encode(String(node.name)).length;
     budget.nodes++;
-    if (budget.bytes > limits.rowBytes || budget.nodes > 10000)
-      throw new Error(
-        "Datensatz zu groß / Record exceeds 2 MiB or 10,000 nodes.",
-      );
+    if (budget.bytes > ceiling.bytes || budget.nodes > ceiling.nodes) throw new RecordLimit();
     if (node.kind === "value") return JSON.parse(String(node.value));
     const children = this.db.selectObjects(
-      "SELECT id,name FROM entities WHERE generation=? AND parent=? ORDER BY position,id LIMIT 10001",
+      `SELECT id,name FROM entities WHERE generation=? AND parent=? ORDER BY position,id ${Number.isFinite(ceiling.nodes) ? `LIMIT ${ceiling.nodes + 1}` : ""}`,
       [generation, id],
     );
-    if (children.length > 10000)
-      throw new Error(
-        "Datensatz hat zu viele Kinder / Record has more than 10,000 children.",
-      );
+    if (children.length > ceiling.nodes) throw new RecordLimit();
     if (node.kind === "array")
       return children.map((child) =>
-        this.value(generation, Number(child.id), budget),
+        this.value(generation, Number(child.id), budget, ceiling),
       );
     if (node.kind === "xml") {
       const { attributes, text } = JSON.parse(String(node.value)) as {
@@ -240,7 +236,7 @@ export class Repository {
       for (const child of children) {
         const name = String(child.name);
         const group = groups.get(name) ?? [];
-        group.push(this.value(generation, Number(child.id), budget));
+        group.push(this.value(generation, Number(child.id), budget, ceiling));
         groups.set(name, group);
       }
       const result: Row = { ...attributes };
@@ -256,7 +252,7 @@ export class Repository {
     return Object.fromEntries(
       children.map((child) => [
         String(child.name),
-        this.value(generation, Number(child.id), budget),
+        this.value(generation, Number(child.id), budget, ceiling),
       ]),
     );
   }
@@ -265,6 +261,15 @@ export class Repository {
       sql: "UPDATE imports SET status='indexing' WHERE id=?",
       bind: [generation],
     });
+    if (!xml) {
+      // Object-only documents are records too; preserve existing array table selection.
+      this.db.exec({
+        sql: `UPDATE entities SET table_path=path
+          WHERE generation=? AND parent IS NULL AND kind='object'
+          AND NOT EXISTS (SELECT 1 FROM entities WHERE generation=? AND table_path IS NOT NULL)`,
+        bind: [generation, generation],
+      });
+    }
     if (xml) {
       // Persist row boundaries before walking the wrappers. The first selected
       // ancestor owns its subtree, exactly as the old DOM conversion did.
@@ -299,7 +304,7 @@ export class Repository {
       });
     }
   }
-  projectBatch(generation: string, after: number) {
+  projectBatch(generation: string, after: number, ceiling = { bytes: limits.rowBytes, nodes: 10000 }) {
     const entities = this.db.selectObjects(
       "SELECT id,table_path FROM entities WHERE generation=? AND id>? AND table_path IS NOT NULL ORDER BY id LIMIT 100",
       [generation, after],
@@ -310,14 +315,13 @@ export class Repository {
       this.db.transaction(() => {
         for (const entity of entities) {
           const id = Number(entity.id),
-            value = this.value(generation, id);
+            value = this.value(generation, id, undefined, ceiling);
           const row =
             value !== null && typeof value === "object" && !Array.isArray(value)
               ? value
               : { "#text": value };
           const payload = JSON.stringify(row);
-          if (encoder.encode(payload).length > limits.rowBytes)
-            throw new Error("Record exceeds 2 MiB.");
+          if (encoder.encode(payload).length > ceiling.bytes) throw new RecordLimit();
           insert.bind([generation, id, entity.table_path, payload]).stepReset();
           const visit = (value: JsonValue, top: boolean) => {
             if (Array.isArray(value)) {

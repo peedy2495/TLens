@@ -1,0 +1,64 @@
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  labels:
+    special: vmi-windows
+  name: vmi-windows
+spec:
+  domain:
+    clock:
+      timer:
+        hpet:
+          present: false
+        hyperv: {}
+        pit:
+          tickPolicy: delay
+        rtc:
+          tickPolicy: catchup
+      utc: {}
+    cpu:
+      cores: 2
+    devices:
+      disks:
+      - disk:
+          bus: sata
+        name: pvcdisk
+        bootOrder: 1
+      - cdrom:
+          bus: sata
+        name: winiso
+        bootOrder: 2
+      interfaces:
+      - masquerade: {}
+        model: e1000
+        name: default
+    features:
+      acpi: {}
+      apic: {}
+      hyperv:
+        relaxed: {}
+        spinlocks:
+          spinlocks: 8191
+        vapic: {}
+      smm: {}
+    firmware:
+      bootloader:
+        efi:
+          secureBoot: false
+      uuid: 5d307ca9-b3ef-428c-8861-06e72d69f223
+    resources:
+      requests:
+        memory: 4Gi
+  networks:
+  - name: default
+    pod: {}
+  terminationGracePeriodSeconds: 0
+  volumes:
+  - name: pvcdisk
+    persistentVolumeClaim:
+      claimName: winhd
+  - name: winiso
+    persistentVolumeClaim:
+      claimName: iso-win10
+

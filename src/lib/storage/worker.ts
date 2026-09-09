@@ -5,11 +5,11 @@ import sqlite3InitModule, {
 } from "@sqlite.org/sqlite-wasm";
 import wasmUrl from "@sqlite.org/sqlite-wasm/sqlite3.wasm?url";
 import { Repository } from "./repository";
-import { ingest, ingestConnector, ingestYamlDocuments } from "../ingestion/service";
+import { ingest, ingestConnector, ingestYamlDocuments, projectionWithWarnings } from "../ingestion/service";
 import { ndjsonParser } from "../ingestion/http";
 import { sources } from "../ingestion/connectors";
 import { exportData } from "./export";
-import { formatFor, type Request } from "../ingestion/contracts";
+import { formatFor, type ConfirmImport, type ImportDecision, type Request } from "../ingestion/contracts";
 
 declare const self: DedicatedWorkerGlobalScope;
 let repository: Promise<Repository> | undefined;
@@ -85,16 +85,27 @@ function open() {
 }
 let active: { id: string; controller: AbortController } | undefined;
 let ack: (() => void) | undefined;
+let pendingWarning: { token: string; resolve: (decision: ImportDecision) => void } | undefined;
 self.onmessage = async ({
   data,
 }: MessageEvent<{
   id: string;
   request?: Request;
-  control?: "cancel" | "ack";
+  control?: "cancel" | "ack" | "limit";
+  token?: string;
+  decision?: ImportDecision;
 }>) => {
   if (data.control) {
     if (active?.id === data.id) {
-      if (data.control === "cancel") active.controller.abort();
+      if (data.control === "limit") {
+        if (pendingWarning && pendingWarning.token === data.token && ["continue", "cancel", "ignore"].includes(data.decision ?? "")) {
+          pendingWarning.resolve(data.decision!); pendingWarning = undefined;
+        }
+        return;
+      }
+      if (data.control === "cancel") {
+        active.controller.abort(); pendingWarning?.resolve("cancel"); pendingWarning = undefined;
+      }
       ack?.();
       ack = undefined;
     }
@@ -106,6 +117,10 @@ self.onmessage = async ({
   }
   const controller = new AbortController();
   active = { id: data.id, controller };
+  const confirm: ConfirmImport = (warning) => new Promise((resolve) => {
+    const token = crypto.randomUUID(); pendingWarning = { token, resolve };
+    self.postMessage({ id: data.id, warning, token });
+  });
   try {
     const request = data.request!;
     const opened = await open().catch((error) => {
@@ -161,7 +176,7 @@ self.onmessage = async ({
           );
         if (formatFor(request.file) === "yaml") {
           result = await ingestYamlDocuments(repo, request.file, request.csv, controller.signal,
-            (progress) => self.postMessage({ id: data.id, progress }), request.language);
+            (progress) => self.postMessage({ id: data.id, progress }), request.language, confirm);
           break;
         }
         result = await ingest(
@@ -171,6 +186,7 @@ self.onmessage = async ({
           controller.signal,
           (progress) => self.postMessage({ id: data.id, progress }),
           request.replace,
+          confirm,
         );
         break;
       }
@@ -184,6 +200,8 @@ self.onmessage = async ({
           controller.signal,
           (progress) => self.postMessage({ id: data.id, progress }),
           ndjsonParser,
+          undefined,
+          confirm,
         );
         break;
       }
@@ -245,10 +263,11 @@ self.onmessage = async ({
               if (id % 100 === 0)
                 await new Promise((resolve) => setTimeout(resolve, 0));
             }
+          const project = projectionWithWarnings(repo, controller.signal, confirm);
           let after = 0;
           for (;;) {
             controller.signal.throwIfAborted();
-            const batch = repo.projectBatch(input.generation, after);
+            const batch = await project(input.generation, after);
             if (!batch.count) break;
             after = batch.after;
             await new Promise((resolve) => setTimeout(resolve, 0));
@@ -299,5 +318,6 @@ self.onmessage = async ({
   } finally {
     active = undefined;
     ack = undefined;
+    pendingWarning = undefined;
   }
 };
