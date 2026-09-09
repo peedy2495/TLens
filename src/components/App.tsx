@@ -38,8 +38,9 @@ import {
 import { exportCsv, defaultCsvOptions, type CsvOptions } from "../lib/csv";
 import {
   eventFilter,
-  filterColumns,
-  filterOptions,
+  matchingFilterColumns,
+  matchingFilterValues,
+  reconcileFilterColumn,
   valueText,
   type Row,
   eventRange,
@@ -99,6 +100,7 @@ function WorkspaceApp() {
   const [files, setFiles] = useState<Dataset[]>([]);
   const storage = useRef<StorageClient | null>(null);
   const [result, setResult] = useState<QueryResult | null>(null);
+  const [resultContext, setResultContext] = useState<string | null>(null);
   const [importWarning, setImportWarning] = useState<ImportWarning | null>(null);
   const warningAnswer = useRef<((decision: ImportDecision) => void) | null>(null);
   function answerWarning(decision: ImportDecision) {
@@ -222,11 +224,22 @@ function WorkspaceApp() {
   })();
   const tables: Table[] = selectedDataset ? result?.tables ?? [] : legacyTables;
   const allColumns = (selectedDataset?.columns ?? Array.from(new Set(tables.flatMap((table) => table.rows.flatMap(Object.keys))))).slice().sort((a, b) => b.localeCompare(a, language, { numeric: true, sensitivity: "base" }));
-  const availableFilterColumns = (selectedDataset?.filterColumns ?? filterColumns(tables)).slice().sort((a, b) => a.localeCompare(b, language, { numeric: true, sensitivity: "base" }));
-  const availableFilterValues = selectedDataset ? result?.values ?? [] : filterOptions(tables, filterColumn);
   const timeColumns = timeColumnsBySource[source] ?? selectedDataset?.mapping ?? detectTimeColumns(allColumns);
   const timelineSourceData = selectedDataset?.generation ?? (source === "jazz" && me.$isLoaded ? me.root.data : undefined);
   const queryRequest: Query = { dataset: source, query, filters, language, filterColumn, filterValue, day: selectedDate, today: localDate(now), mapping: timeColumns, colorColumn, sorts: tableSorts, pages, timelinePage, pathPage, valuePage };
+  const queryKey = JSON.stringify(queryRequest);
+  const filtersKey = JSON.stringify(filters);
+  // Freshness is derived synchronously so the first render after a context
+  // change never offers stale choices: only an accepted result whose request
+  // context (query, generation, revision) matches the current one is fresh.
+  const requestContext = selectedDataset ? `${queryKey}|${selectedDataset.generation}|${revision}` : null;
+  const resultFresh = Boolean(selectedDataset && result && resultContext === requestContext);
+  const freshResult = resultFresh ? result : null;
+  // Display columns stay source-wide; filter choices follow current matches.
+  const availableFilterColumns = (selectedDataset ? freshResult?.filterFields ?? [] : matchingFilterColumns(tables, query, filters)).slice().sort((a, b) => a.localeCompare(b, language, { numeric: true, sensitivity: "base" }));
+  const availableFilterValues = selectedDataset ? freshResult?.values ?? [] : matchingFilterValues(tables, query, filters, filterColumn, filterValue);
+  const filterPending = Boolean(selectedDataset && !resultFresh);
+  const displayedFilterValues = availableFilterValues;
   useEffect(() => {
     const client = new StorageClient(); storage.current = client;
     client.request<Dataset[]>({ type: "list" }).then((datasets) => { setFiles(datasets); setStorageReady(true); }).catch((error) => setStorageError(String(error)));
@@ -286,21 +299,34 @@ function WorkspaceApp() {
       </button>
     </div>;
   }
-  const queryKey = JSON.stringify(queryRequest);
   useEffect(() => {
-    if (!selectedDataset || !storage.current) { setResult(null); return; }
+    if (!selectedDataset || !storage.current) { setResult(null); setResultContext(null); return; }
     let cancelled = false;
     setLoading(true);
+    const acceptedContext = requestContext;
     const timer = setTimeout(() => {
       storage.current!.request<QueryResult>({ type: "query", query: queryRequest }).then((data) => {
-        if (!cancelled) { setResult(data); setLoading(false); }
+        if (!cancelled) { setResult(data); setResultContext(acceptedContext); setLoading(false); }
       }).catch((error) => { if (!cancelled) { setNotice(String(error)); setLoading(false); } });
     }, 150);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [queryKey, selectedDataset?.generation, revision]);
   useEffect(() => { setPages({}); setTimelinePage(0); setPathPage(0); }, [source, query, JSON.stringify(filters), JSON.stringify(tableSorts), selectedDate]);
   useEffect(() => { setDetail(null); }, [source, selectedDataset?.generation]);
-  useEffect(() => { setValuePage(0); }, [filterColumn, filterValue]);
+  useEffect(() => { setValuePage(0); }, [source, selectedDataset?.generation, revision, query, filtersKey, filterColumn, filterValue]);
+  const availableColumnsKey = JSON.stringify(availableFilterColumns);
+  useEffect(() => {
+    // Reconcile an unavailable selected field after fresh results (SQLite) or
+    // synchronously derived matches (legacy); keep valid manual input.
+    if (selectedDataset && (!freshResult || !resultFresh)) return;
+    const reconciled = reconcileFilterColumn(availableFilterColumns, filterColumn);
+    if (reconciled !== filterColumn) {
+      setFilterColumn(reconciled);
+      setFilterValue("");
+    }
+    // Reconcile once per fresh result; keep valid manual input unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [freshResult, resultFresh, availableColumnsKey, selectedDataset]);
   useEffect(() => {
     if (!source || timelineSourceData === undefined) return;
     if (timelineLoad.current?.source === source && timelineLoad.current.data === timelineSourceData) return;
@@ -614,7 +640,9 @@ function WorkspaceApp() {
               className="inline-panel filter-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (filterValue.trim()) {
+                if (filterPending) return;
+                if (!filterColumn || !availableFilterColumns.includes(filterColumn)) return;
+                if (filterValue.trim() && filterColumn) {
                   setFilters([
                     ...filters,
                     { column: filterColumn, value: filterValue.trim() },
@@ -628,6 +656,7 @@ function WorkspaceApp() {
                 {t("Spalte", "Column")}
                 <select
                   value={filterColumn}
+                  disabled={filterPending}
                   onChange={(e) => {
                     setFilterColumn(e.target.value);
                     setFilterValue("");
@@ -655,17 +684,27 @@ function WorkspaceApp() {
                   list="filter-value-options"
                 />
                 <datalist id="filter-value-options">
-                  {availableFilterValues.map((value) => (
+                  {displayedFilterValues.map((value) => (
                     <option key={value} value={value} />
                   ))}
                 </datalist>
-                {selectedDataset && (valuePage > 0 || result?.moreValues) && <div className="data-pagination">
-                  <button type="button" disabled={!valuePage} onClick={() => setValuePage((p) => Math.max(0, p - 100))}>←</button>
-                  {t("Wertvorschläge", "Value suggestions")} {valuePage + 1}–{valuePage + availableFilterValues.length}
-                  <button type="button" disabled={!result?.moreValues} onClick={() => setValuePage((p) => p + availableFilterValues.length)}>→</button>
+                {selectedDataset && (valuePage > 0 || freshResult?.moreValues) && <div className="data-pagination">
+                  <button type="button" disabled={!valuePage || filterPending} onClick={() => setValuePage((p) => Math.max(0, p - 100))}>←</button>
+                  {t("Wertvorschläge", "Value suggestions")} {valuePage + 1}–{valuePage + displayedFilterValues.length}
+                  <button type="button" disabled={!freshResult?.moreValues || filterPending} onClick={() => setValuePage((p) => p + displayedFilterValues.length)}>→</button>
                 </div>}
               </label>
-              <button className="primary" type="submit">
+              <button
+                className="primary"
+                type="submit"
+                disabled={
+                  filterPending ||
+                  !filterColumn ||
+                  !availableFilterColumns.includes(filterColumn) ||
+                  !availableFilterColumns.length ||
+                  (selectedDataset ? freshResult?.total === 0 : filtered.length === 0)
+                }
+              >
                 <PlusIcon />
                 {t("Filter hinzufügen", "Add filter")}
               </button>

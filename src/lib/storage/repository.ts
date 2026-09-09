@@ -590,10 +590,16 @@ export class Repository {
       return { path, total: Number(p.total), rows, ids, columns, offset };
     });
     const language = q.language === "de" ? "de" : "en";
+    const filterFields = this.strings(
+      `SELECT DISTINCT f.name FROM fields f JOIN records r ON r.generation=f.generation AND r.id=f.record WHERE r.${where.sql} LIMIT 1001`,
+      where.bind,
+    );
+    if (filterFields.length > 1000)
+      throw new Error("Dataset exceeds 1,000 distinct field names.");
     const values = this.strings(
-      `SELECT DISTINCT value FROM fields WHERE generation=? AND name=? AND value!='' AND instr(lower(value),lower(?))>0 ORDER BY value COLLATE values_${language} DESC LIMIT 101 OFFSET ?`,
+      `SELECT DISTINCT f.value FROM fields f JOIN records r ON r.generation=f.generation AND r.id=f.record WHERE r.${where.sql} AND f.name=? AND f.value!='' AND instr(lower(f.value),lower(?))>0 ORDER BY f.value COLLATE values_${language} DESC LIMIT 101 OFFSET ?`,
       [
-        dataset.generation,
+        ...where.bind,
         q.filterColumn,
         q.filterValue ?? "",
         q.valuePage ?? 0,
@@ -642,6 +648,7 @@ export class Repository {
         tables,
         total,
         tableCount,
+        filterFields,
         values: values.slice(0, 100),
         moreValues: values.length > 100,
         dates,
@@ -701,6 +708,7 @@ export class Repository {
       tables,
       total,
       tableCount,
+      filterFields,
       values: values.slice(0, 100),
       moreValues: values.length > 100,
       dates,

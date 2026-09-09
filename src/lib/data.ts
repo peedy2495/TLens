@@ -75,6 +75,35 @@ export function eventFilter(filters: Filter[], id: string): Filter[] {
     { column: "EventID", value: id, operator: "equals" },
   ];
 }
+// Filter choices follow the current search and all active filters across the
+// full result, not just the visible table pages. The unfinished value input
+// only narrows value suggestions, never the field list.
+export function matchingFilterColumns(
+  tables: Table[],
+  query: string,
+  filters: Filter[],
+): string[] {
+  return filterColumns(filterTables(tables, query, filters));
+}
+export function matchingFilterValues(
+  tables: Table[],
+  query: string,
+  filters: Filter[],
+  column: string,
+  valueInput = "",
+): string[] {
+  const values = filterOptions(filterTables(tables, query, filters), column);
+  const needle = valueInput.toLowerCase();
+  return needle
+    ? values.filter((value) => value.toLowerCase().includes(needle))
+    : values;
+}
+export function reconcileFilterColumn(
+  available: string[],
+  current: string,
+): string {
+  return available.includes(current) ? current : (available[0] ?? "");
+}
 export type View = {
   id: string;
   name: string;

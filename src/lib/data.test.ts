@@ -7,7 +7,10 @@ import {
   filterOptions,
   filterTables,
   isDate,
+  matchingFilterColumns,
+  matchingFilterValues,
   nextDate,
+  reconcileFilterColumn,
   toTables,
 } from "./data";
 describe("data pipeline", () => {
@@ -124,5 +127,38 @@ describe("data pipeline", () => {
       end: 1500,
     });
     expect(eventRange({ Start: "28:00", End: "oops" }).start).toBeNaN();
+  });
+  it("scopes in-memory filter choices to current matches without unfiltered fallback", () => {
+    const tables = toTables({
+      Events: [
+        { Area: "Stage 1", Keep: "yes" },
+        { Area: "Stage 2", Exclusive: "only-stage-2" },
+      ],
+    });
+    expect(
+      matchingFilterColumns(tables, "", [{ column: "Area", value: "Stage 1" }]),
+    ).toEqual(["Area", "Keep"]);
+    expect(
+      matchingFilterValues(tables, "", [{ column: "Area", value: "Stage 1" }], "Area"),
+    ).toEqual(["Stage 1"]);
+    // Unfinished value input narrows values only, never the field list.
+    expect(matchingFilterValues(tables, "", [], "Area", "stage 2")).toEqual([
+      "Stage 2",
+    ]);
+    expect(matchingFilterColumns(tables, "stage 2", [])).toContain("Exclusive");
+    expect(matchingFilterColumns(tables, "", [])).toContain("Exclusive");
+    // Zero matches offer no fallback; removing filters restores options.
+    expect(
+      matchingFilterColumns(tables, "", [{ column: "Area", value: "nowhere" }]),
+    ).toEqual([]);
+    expect(
+      matchingFilterValues(tables, "", [{ column: "Area", value: "nowhere" }], "Area"),
+    ).toEqual([]);
+  });
+  it("reconciles an unavailable selected filter field without loops", () => {
+    expect(reconcileFilterColumn(["Area", "Keep"], "Area")).toBe("Area");
+    expect(reconcileFilterColumn(["Keep"], "Area")).toBe("Keep");
+    expect(reconcileFilterColumn([], "Area")).toBe("");
+    expect(reconcileFilterColumn([], "")).toBe("");
   });
 });

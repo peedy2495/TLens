@@ -48,7 +48,7 @@ Auch das Feld „Dein Workspace ist leer“ akzeptiert Drag & Drop, solange kein
 
 Eine Datei lässt sich direkt auf die Datenquellenauswahl ziehen; das Ziel wird beim Darüberziehen hervorgehoben. Unterstützt werden ausschließlich `.json`, `.yaml`, `.yml`, `.csv` und `.xml`, unabhängig von Groß-/Kleinschreibung. Andere Formate werden auch bei der normalen Dateiauswahl mit einem Hinweis abgewiesen. Bitte jeweils eine Datei ablegen; fehlgeschlagene Importe lassen die bisherige Quelle unverändert.
 
-- Filter suchen auch in verschachtelten Objekten und Arrays: Eine PersonID im Personal eines Events findet das zugehörige Event. Die Feldauswahl ist aufsteigend sortiert; vorhandene Werte werden eindeutig und absteigend angeboten. Freie Eingabe bleibt möglich, ohne Beispiel-Platzhalter. Beim Feldwechsel wird der Eingabewert geleert.
+- Filter suchen auch in verschachtelten Objekten und Arrays: Eine PersonID im Personal eines Events findet das zugehörige Event. Die Feldauswahl ist aufsteigend sortiert; vorhandene Werte werden eindeutig und absteigend angeboten. Feld- und Wertvorschläge stammen aus den Datensätzen, die zur aktuellen Suche und allen aktiven Filtern passen (vollständiges Ergebnis, nicht nur die sichtbare Seite); freie Eingabe bleibt möglich, ohne Beispiel-Platzhalter. Beim Feldwechsel wird der Eingabewert geleert.
 - Jede Tabelle wird unabhängig sortiert: aufsteigend → absteigend → unsortiert. Der aktive Richtungspfeil ist orange; unsortiert stellt die ursprüngliche Reihenfolge wieder her und ist der Startzustand.
 - Das kompakte Suchfeld-Löschsymbol erscheint nur bei vorhandener Eingabe. Bei leerer Suche wird kein Ersatzsymbol angezeigt.
 - **Allgemein:** Sprache.

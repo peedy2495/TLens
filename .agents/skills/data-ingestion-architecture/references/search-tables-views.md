@@ -10,6 +10,9 @@
 - Example: `Personal[].PersonID` must match its containing event.
 - Offer filter fields ascending A–Z with natural numeric ordering.
 - Offer unique existing values descending while allowing manual input.
+- Constrain offered filter fields and values to records matching the current
+  search text and all active filters, across the full result rather than only
+  the visible table/row pages; manual input remains supported.
 - Leave filter value input empty without example placeholder.
 - Clear entered value when switching filter fields.
 - Use date/time pickers for corresponding fields.

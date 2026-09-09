@@ -94,6 +94,7 @@ export interface QueryResult {
   tables: PageTable[];
   total: number;
   tableCount: number;
+  filterFields: string[];
   values: string[];
   moreValues: boolean;
   dates: string[];

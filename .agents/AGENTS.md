@@ -42,6 +42,7 @@ A tool for filtering and displaying hierarchical data structures as well as rela
 - Combine field filters with the search text. Each active filter must match the record.
 - Find filter fields and values recursively in nested objects and arrays: for example, `Personal[].PersonID` must match its containing event.
 - Offer filter fields in ascending order (A–Z, with natural numeric ordering). Offer unique existing values in descending order while allowing manual input.
+- Constrain offered filter fields and values to records matching the current search text and all active filters, across the full result rather than only the visible table/row pages; manual input remains supported.
 - Leave the filter value input empty without an example placeholder. Clear the entered value when switching filter fields.
 - Use date/time pickers for the corresponding fields; time pickers follow the selected start/end mappings.
 - The search clear button appears only for nonempty search text. Show no replacement symbol or shortcut badge when empty.

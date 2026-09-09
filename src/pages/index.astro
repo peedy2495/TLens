@@ -1,5 +1,7 @@
 ---
 import App from '../components/App';
 import '../styles.css';
+import { pwaInfo } from 'virtual:pwa-info';
+const manifestUrl = pwaInfo ? pwaInfo.webManifestUrl : '/manifest.webmanifest';
 ---
-<!doctype html><html lang="de"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="theme-color" content="#f6f8fa"/><meta name="description" content="DLens – deine Daten, eine klare Ansicht."/><title>DLens · Data Explorer</title><link rel="icon" href="/favicon.svg"/></head><body><App client:only="react"/></body></html>
+<!doctype html><html lang="de"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="theme-color" content="#f97316"/><meta name="description" content="DLens – deine Daten, eine klare Ansicht."/><meta name="mobile-web-app-capable" content="yes"/><meta name="apple-mobile-web-app-capable" content="yes"/><meta name="apple-mobile-web-app-status-bar-style" content="default"/><meta name="apple-mobile-web-app-title" content="DLens"/><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"/><title>DLens · Data Explorer</title><link rel="icon" href="/favicon.svg"/><link rel="manifest" href={manifestUrl}/></head><body><App client:only="react"/></body></html>
