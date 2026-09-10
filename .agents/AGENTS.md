@@ -24,6 +24,7 @@ Load a skill only when its scope is materially relevant. Mixed tasks may load mu
 - Database/API/HTTP connectors and connector contracts: `.agents/skills/connectors/SKILL.md`
 - UI components, interaction, styling, accessibility, responsive behavior: `.agents/skills/ui/SKILL.md`
 - Test strategy, test infrastructure, or substantial test-only work: `.agents/skills/testing/SKILL.md`
+- Commit preparation/creation, pushing changes, and follow-up delivery: `.agents/skills/git/SKILL.md`
 - Delegated implementation through OpenCode/Muse: `.agents/skills/opencode-executor/SKILL.md`
 - Agent instructions, skill structure, routing, references, or executor-workflow maintenance: `.agents/skills/agent-maintenance/SKILL.md`
 
