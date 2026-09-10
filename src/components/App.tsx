@@ -11,6 +11,7 @@ import {
   ArrowUpIcon,
   ArrowDownIcon,
   ArrowDownTrayIcon,
+  ArrowLeftIcon,
   ArrowPathIcon,
   BookmarkIcon,
   CalendarDaysIcon,
@@ -23,6 +24,7 @@ import {
   CloudIcon,
   Cog6ToothIcon,
   DocumentChartBarIcon,
+  DocumentPlusIcon,
   EyeIcon,
   FolderIcon,
   FunnelIcon,
@@ -82,7 +84,17 @@ import {
   type ConnectorProfile,
 } from "../lib/source-identity";
 import { DLensAccount } from "../lib/jazz";
+import {
+  findStoredHandle,
+  isPickerCancel,
+  lookupKeysForDataset,
+  pickLocalFile,
+  storeHandleForDatasets,
+  supportsFilePicker,
+  type LocalFileHandle,
+} from "../lib/local-file-handles";
 import { StorageClient } from "../lib/storage/client";
+import { newId } from "../lib/ids";
 import { downloadStorage } from "../lib/storage/download";
 import { formatFor, type ImportWarning, type ImportDecision, type Dataset, type Query, type QueryResult, type Progress, type PageTable } from "../lib/ingestion/contracts";
 
@@ -98,13 +110,16 @@ function IconButton({
   label,
   children,
   onClick,
+  buttonRef,
 }: {
   label: string;
   children: ReactNode;
   onClick: () => void;
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={buttonRef}
       className="icon-button"
       title={label}
       aria-label={label}
@@ -144,6 +159,12 @@ function WorkspaceApp() {
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const [urlHelpOpen, setUrlHelpOpen] = useState(false);
+  // Session-only native file handles: retained in memory by stable
+  // source/group identity so reload can re-read fresh bytes. Never persisted.
+  const fileHandles = useRef(new Map<string, LocalFileHandle>());
+  const pickerBusy = useRef(false);
+  const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const settingsBack = useRef<HTMLButtonElement>(null);
   const [localPath, setLocalPath] = useState("");
   const [connectorChoice, setConnectorChoice] = useState("");
   const [connectorSource, setConnectorSource] = useState("");
@@ -184,6 +205,46 @@ function WorkspaceApp() {
   );
   const [panel, setPanel] = useState("");
   const [settings, setSettings] = useState(false);
+  const [settingsView, setSettingsView] = useState(false);
+  const [settingsLeaving, setSettingsLeaving] = useState(false);
+  const [settingsAnimated, setSettingsAnimated] = useState(false);
+  const settingsMounted = useRef(false);
+  useEffect(() => {
+    // Same-page settings: move focus to the back control on open and return
+    // it to the settings trigger on close. Skipped on first render so page
+    // load never steals focus. Runs on the rendered view so focus only
+    // returns after the closing animation has unmounted settings.
+    if (!settingsMounted.current) { settingsMounted.current = true; return; }
+    if (settingsView) settingsBack.current?.focus();
+    else settingsTrigger.current?.focus();
+  }, [settingsView]);
+  useEffect(() => {
+    // Keep settings mounted for a 180ms ease-in exit animation before
+    // switching back to the workspace. Instant on reduced motion.
+    if (!settingsMounted.current) return;
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReduced) {
+      setSettingsView(settings);
+      setSettingsLeaving(false);
+      return;
+    }
+    if (settings) {
+      setSettingsAnimated(true);
+      setSettingsView(true);
+      setSettingsLeaving(false);
+      return;
+    }
+    if (!settingsView) return;
+    setSettingsLeaving(true);
+    const id = setTimeout(() => {
+      setSettingsView(false);
+      setSettingsLeaving(false);
+    }, 180);
+    return () => clearTimeout(id);
+  }, [settings, settingsView]);
   const [csvOptions, setCsvOptions] = useState<CsvOptions>(() =>
     ({ ...defaultCsvOptions, ...readStored("dlens-csv-options", {}) }),
   );
@@ -489,7 +550,7 @@ function WorkspaceApp() {
       return [];
     }
   }
-  async function importFile(file: File | undefined) {
+  async function importFile(file: File | undefined, handle: LocalFileHandle | null = null) {
     if (!file || working) return;
     try {
       formatFor(file);
@@ -513,6 +574,9 @@ function WorkspaceApp() {
       }, { progress: setProgress, confirm: confirmImport });
       const datasets = Array.isArray(imported) ? imported : [imported];
       const dataset = datasets[0];
+      // Retain the native handle under the fresh group/id keys so the next
+      // reload can re-read the file without asking again.
+      if (handle) storeHandleForDatasets(fileHandles.current, datasets, handle);
       setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
       setTimeColumnsBySource((previous) => ({ ...previous, ...Object.fromEntries(datasets.map((data) => [data.id, data.mapping])) }));
       setResult(null); setResultContext(null); setSource(dataset.id);
@@ -525,15 +589,63 @@ function WorkspaceApp() {
     }
     finally { setWorking(false); setProgress(null); }
   }
-  function requestLocalReload(file: Dataset) {
-    if (working) return;
-    // The browser keeps no durable file handle: capture only the target here
-    // and read a freshly selected file when the picker resolves.
+  /** File-open action: native picker with a retained handle when supported, input fallback otherwise. */
+  async function openFileViaPicker() {
+    if (working || pickerBusy.current) return;
+    if (!supportsFilePicker()) {
+      fileInput.current?.click();
+      return;
+    }
+    pickerBusy.current = true;
+    try {
+      const picked = await pickLocalFile();
+      if (picked) await importFile(picked.file, picked.handle);
+    } catch (error) {
+      if (!isPickerCancel(error)) setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      pickerBusy.current = false;
+    }
+  }
+  async function requestLocalReload(file: Dataset) {
+    if (working || pickerBusy.current) return;
+    const stored = findStoredHandle(fileHandles.current, file);
+    if (stored) {
+      // A retained handle exists: re-read fresh bytes automatically without
+      // asking the user again. Never reuse a stale File snapshot.
+      pickerBusy.current = true;
+      try {
+        const fresh = await stored.getFile();
+        await importLocalReloadFile(fresh, file.id, stored);
+      } catch (error) {
+        if (isPickerCancel(error)) return;
+        setNotice(error instanceof Error ? error.message : String(error));
+        await refreshAfterReplacement();
+      } finally {
+        pickerBusy.current = false;
+      }
+      return;
+    }
+    if (supportsFilePicker()) {
+      // No handle retained for this source: let the user pick the file once
+      // and retain its native handle for the next reload.
+      pickerBusy.current = true;
+      try {
+        const picked = await pickLocalFile();
+        if (picked) await importLocalReloadFile(picked.file, file.id, picked.handle);
+      } catch (error) {
+        if (!isPickerCancel(error)) setNotice(error instanceof Error ? error.message : String(error));
+      } finally {
+        pickerBusy.current = false;
+      }
+      return;
+    }
+    // Unsupported browsers keep the file-input fallback: capture only the
+    // target here and read a freshly selected file when it resolves.
     pendingLocalReload.current = file.id;
     localReloadInput.current?.click();
   }
-  async function importLocalReloadFile(file: File | undefined) {
-    const targetId = pendingLocalReload.current;
+  async function importLocalReloadFile(file: File | undefined, explicitTargetId?: string, handle: LocalFileHandle | null = null) {
+    const targetId = explicitTargetId ?? pendingLocalReload.current;
     pendingLocalReload.current = null;
     if (!file || working) return;
     try {
@@ -565,6 +677,12 @@ function WorkspaceApp() {
       }, { progress: setProgress, confirm: confirmImport });
       const datasets = Array.isArray(imported) ? imported : [imported];
       const dataset = datasets[0];
+      // Remap the handle onto the replacement datasets: ids change on every
+      // reload, but the group id is reused, so future reloads keep working.
+      if (handle) {
+        for (const key of lookupKeysForDataset(target)) fileHandles.current.delete(key);
+        storeHandleForDatasets(fileHandles.current, datasets, handle);
+      }
       setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
       setTimeColumnsBySource((previousTime) => ({ ...previousTime, ...Object.fromEntries(datasets.map((data) => [data.id, data.mapping])) }));
       setResult(null); setResultContext(null); setSource(dataset.id);
@@ -683,8 +801,8 @@ function WorkspaceApp() {
     <div className="app-shell">
       <header className="topbar">
         <a className="brand" href="/">
-          <span className="brand-mark">
-            D<span />
+          <span className="brand-mark" aria-hidden="true">
+            <img src="/favicon.svg" width="35" height="35" alt="" />
           </span>
           DLens
           <span className="brand-divider" />
@@ -708,6 +826,216 @@ function WorkspaceApp() {
             {t("Lokal gespeichert", "Stored locally")}
           </span>
         </div>
+        {settingsView ? (
+          <section
+            className={`controls settings-page${settingsLeaving ? " settings-exit" : settingsAnimated ? " settings-enter" : ""}`}
+            aria-label={t("Einstellungen", "Settings")}
+          >
+            <button
+              ref={settingsBack}
+              type="button"
+              className="settings-back"
+              onClick={() => setSettings(false)}
+              aria-label={t("Zurück zum Workspace", "Back to workspace")}
+            >
+              <ArrowLeftIcon />
+              {t("Zurück", "Back")}
+            </button>
+            <h2>{t("Einstellungen", "Settings")}</h2>
+            <p className="subtle">
+              {t(
+                "Dein Workspace, so wie du ihn brauchst.",
+                "Your workspace, just how you need it.",
+              )}
+            </p>
+            <section className="settings-group" aria-labelledby="settings-general">
+            <h3 id="settings-general">{t("Allgemein", "General")}</h3>
+            <label>
+              {t("Sprache", "Language")}
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value as "de" | "en")}
+              >
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <PwaSettings language={language} working={working} pwa={pwa} />
+            </section>
+            <section className="settings-group" aria-labelledby="settings-display">
+            <h3 id="settings-display">{t("Anzeige", "Display")}</h3>
+            <label className="timeline-toggle">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={showTimeline}
+                onChange={(event) => setShowTimeline(event.target.checked)}
+              />
+              {t("Zeitstrahl anzeigen", "Show timeline")}
+            </label>
+            {(["start", "end"] as const).map((kind) => (
+              <label key={kind}>
+                {kind === "start" ? t("Startzeit-Feld", "Start time field") : t("Endzeit-Feld", "End time field")}
+                <select
+                  value={timeColumns[kind]}
+                  disabled={!source}
+                  onChange={(event) => setTimeColumnsBySource((previous) => ({
+                    ...previous,
+                    [source]: { ...timeColumns, [kind]: event.target.value },
+                  }))}
+                >
+                  <option value="">{t("Bitte auswählen", "Please select")}</option>
+                  {[...allColumns].sort((a, b) => a.localeCompare(b, language, { numeric: true })).map((column) => (
+                    <option key={column} value={column}>{column}</option>
+                  ))}
+                </select>
+              </label>
+            ))}
+            <p className="subtle">
+              {t("Zeitfelder werden anhand üblicher Feldnamen vorausgewählt. Die Zuordnung gilt für die aktuelle Quelle.", "Time fields are preselected using common field names. The mapping applies to the current source.")}
+            </p>
+            <label>
+              {t("Einfärbung nach", "Color by")}
+              <select value={colorColumn} onChange={(event) => setColorColumn(event.target.value)}>
+                {!allColumns.includes(colorColumn) && (
+                  <option value={colorColumn}>{colorColumn}</option>
+                )}
+                {[...allColumns].sort((a, b) => a.localeCompare(b, language, { numeric: true })).map((column) => (
+                  <option key={column} value={column}>{column}</option>
+                ))}
+              </select>
+            </label>
+            <p className="subtle">
+              {t(
+                "Gleiche Werte erhalten im Zeitstrahl und in der gewählten Tabellenspalte dieselbe Farbe.",
+                "Matching values share a color in the timeline and the selected table column.",
+              )}
+            </p>
+            </section>
+            <section className="settings-group" aria-labelledby="settings-sources">
+            <h3 id="settings-sources">{t("Datenquellen", "Data sources")}</h3>
+            <h4>{t("CSV-Format", "CSV format")}</h4>
+            <label>
+              {t("Trennzeichen", "Delimiter")}
+              <select value={csvOptions.delimiter} onChange={(event) => setCsvOptions((previous) => ({ ...previous, delimiter: event.target.value as CsvOptions["delimiter"] }))}>
+                <option value="auto">{t("Automatisch", "Automatic")}</option>
+                <option value=",">{t("Komma", "Comma")}</option>
+                <option value=";">{t("Semikolon", "Semicolon")}</option>
+                <option value={"\t"}>{t("Tabulator", "Tab")}</option>
+                <option value="|">{t("Senkrechter Strich |", "Pipe |")}</option>
+              </select>
+            </label>
+            <label>
+              {t("Textbegrenzungszeichen", "Quote character")}
+              <select value={csvOptions.quote} onChange={(event) => setCsvOptions((previous) => ({ ...previous, quote: event.target.value as CsvOptions["quote"] }))}>
+                <option value={'"'}>{t('Doppelte Anführungszeichen (")', 'Double quotes (")')}</option>
+                <option value="'">{t("Einfache Anführungszeichen (')", "Single quotes (')")}</option>
+                <option value="">{t("Keine", "None")}</option>
+              </select>
+            </label>
+            <label className="timeline-toggle">
+              <input type="checkbox" checked={csvOptions.header} onChange={(event) => setCsvOptions((previous) => ({ ...previous, header: event.target.checked }))} />
+              {t("Erste Zeile enthält Spaltennamen", "First row contains column names")}
+            </label>
+            <p className="subtle">{t("Gilt für CSV-Import und -Export. Automatisch verwendet beim Export Komma. Ohne Kopfzeile heißen importierte Spalten Column1, Column2 usw. Werte bleiben als Text erhalten.", "Applies to CSV import and export. Automatic uses commas for export. Without a header, imported columns are named Column1, Column2, etc. Values remain text.")}</p>
+            <button type="button" onClick={() => setCsvOptions({ ...defaultCsvOptions })}>{t("CSV-Defaults wiederherstellen", "Restore CSV defaults")}</button>
+            <div className="settings-divider" />
+            <h3><CircleStackIcon />{t("Datenbanken", "Databases")}</h3>
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => {
+                const profile: ConnectorProfile = { id: newProfileId(), name: t("Neue Datenbank", "New database"), kind: "postgres", endpoint: "" };
+                setConnectors((previous) => [...previous, profile]);
+                setExpandedConnector(profile.id);
+              }}
+            >
+              <PlusIcon />
+              {t("Datenbank hinzufügen +", "Add database +")}
+            </button>
+            {connectors.map((profile) => {
+              const expanded = expandedConnector === profile.id;
+              return (
+                <div key={profile.id}>
+                  <div className="source-option">
+                    <CircleStackIcon aria-hidden="true" />
+                    <span className="source-name">{profile.name}</span>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t(`Verbindung „${profile.name}“ löschen`, `Delete connection “${profile.name}”`)}
+                      aria-label={t(`Verbindung „${profile.name}“ löschen`, `Delete connection “${profile.name}”`)}
+                      disabled={working}
+                      onClick={() => {
+                        if (!window.confirm(t(`Verbindung „${profile.name}“ löschen?`, `Delete connection “${profile.name}”?`))) return;
+                        setConnectors((previous) => previous.filter((entry) => entry.id !== profile.id));
+                        if (expandedConnector === profile.id) setExpandedConnector(null);
+                        if (connectorChoice === profile.id) { setConnectorChoice(""); setConnectorSource(""); setConnectorSources([]); }
+                      }}
+                    >
+                      <TrashIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button source-chevron"
+                      title={expanded ? t("Einstellungen einklappen", "Collapse settings") : t("Einstellungen bearbeiten", "Edit settings")}
+                      aria-label={expanded ? t("Einstellungen einklappen", "Collapse settings") : t("Einstellungen bearbeiten", "Edit settings")}
+                      aria-expanded={expanded}
+                      onClick={() => setExpandedConnector(expanded ? null : profile.id)}
+                    >
+                      <ChevronDownIcon className={expanded ? "" : "rotated"} />
+                    </button>
+                  </div>
+                  {expanded && (
+                    <div className="inline-panel">
+                      <label>
+                        {t("Name", "Name")}
+                        <input
+                          value={profile.name}
+                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, name: e.target.value } : entry))}
+                        />
+                      </label>
+                      <label>
+                        {t("Typ", "Type")}
+                        <select
+                          value={profile.kind}
+                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, kind: e.target.value as ConnectorProfile["kind"] } : entry))}
+                        >
+                          <option value="postgres">PostgreSQL</option>
+                          <option value="mariadb">MariaDB</option>
+                          <option value="ndjson">NDJSON</option>
+                        </select>
+                      </label>
+                      <label>
+                        {profile.kind === "ndjson" ? "URL" : t("Connector-URL", "Connector URL")}
+                        <input
+                          type="url"
+                          value={profile.endpoint}
+                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, endpoint: e.target.value } : entry))}
+                          placeholder={profile.kind === "ndjson" ? "https://example.org/records" : "http://127.0.0.1:8787"}
+                        />
+                      </label>
+                      <p className="subtle">
+                        {profile.kind === "ndjson"
+                          ? t("Tokens werden nicht gespeichert und gelten nur für den laufenden Import.", "Tokens are not stored and apply only to the running import.")
+                          : t("Zugangsdaten liegen ausschließlich im Connector-Backend. Gespeichert werden nur Name, Typ und URL.", "Credentials stay in the connector backend. Only name, type and URL are stored.")}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <div className="settings-divider" />
+            <h3><CircleStackIcon />{t("Lokaler Datenspeicher", "Local data storage")}</h3>
+            {storageStats && <p>{t("Datenbank", "Database")}: {(storageStats.databaseBytes / 2 ** 20).toFixed(1)} MiB · {t("Geschätzter freier Browserspeicher", "Estimated available browser storage")}: {storageStats.quota ? ((storageStats.quota - (storageStats.usage ?? 0)) / 2 ** 30).toFixed(1) + " GiB" : "—"} · {storageStats.persisted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Speicherung unterliegt Browserbereinigung", "Storage subject to browser eviction")}</p>}
+            <p>{t("Importierte Dateien bleiben lokal in diesem Browser gespeichert. Die Originaldatei wird nicht zusätzlich kopiert.", "Imported files persist locally in this browser. Original files are not duplicated.")}</p>
+            <button onClick={() => { void navigator.storage?.persist().then((granted) => setNotice(granted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Browser hat dauerhaften Speicher nicht gewährt", "Browser did not grant persistent storage"))); }}>{t("Dauerhaften Browserspeicher anfragen", "Request persistent browser storage")}</button>
+            {selectedDataset && <button disabled={working} onClick={() => void deleteImported("source")}>{t("Ausgewählte Quelle löschen", "Delete selected source")}</button>}
+            <button disabled={working} onClick={() => void deleteImported("all")}>{t("Alle importierten Daten löschen", "Delete all imported data")}</button>
+            </section>
+          </section>
+        ) : (
+        <div className={settingsAnimated ? "workspace-enter" : undefined}>
         <section
           className="controls"
           aria-label={t("Daten und Filter", "Data and filters")}
@@ -777,12 +1105,13 @@ function WorkspaceApp() {
             </button>
             <IconButton
               label={t("Datei öffnen", "Open file")}
-              onClick={() => fileInput.current?.click()}
+              onClick={() => void openFileViaPicker()}
             >
-              <FolderIcon />
+              <DocumentPlusIcon />
             </IconButton>
             <IconButton
               label={t("Einstellungen", "Settings")}
+              buttonRef={settingsTrigger}
               onClick={() => setSettings(true)}
             >
               <Cog6ToothIcon />
@@ -816,8 +1145,8 @@ function WorkspaceApp() {
             <div className="inline-panel sources">
               <div className="source-heading"><span>{t("Daten importieren", "Import Data")}</span></div>
               {files.filter((file) => !["jazz", "api"].includes(file.format)).map(sourceOption)}
-              <button onClick={() => fileInput.current?.click()}>
-                <PlusIcon />
+              <button onClick={() => void openFileViaPicker()}>
+                <DocumentPlusIcon />
                 {t("Datei auswählen", "Select file")}
                 <small>JSON / YAML / KYAML / CSV / XML</small>
               </button>
@@ -841,31 +1170,56 @@ function WorkspaceApp() {
                   <button
                     type="button"
                     className="icon-button url-info"
-                    aria-expanded={urlHelpOpen}
-                    aria-controls="url-help"
                     title={t("Hilfe zu Web-Quellen", "Web source help")}
                     aria-label={t("Hilfe zu Web-Quellen", "Web source help")}
-                    onClick={() => setUrlHelpOpen((open) => !open)}
+                    onClick={() => setUrlHelpOpen(true)}
                   >
                     <InformationCircleIcon />
                   </button>
                 </div>
-                {urlHelpOpen && (
-                  <div id="url-help">
-                    <p className="subtle">
-                      {t(
-                        "URLs müssen nicht auf eine Dateiendung enden; der vom Server geladene Dateiname bestimmt das Format. Unterstützt: JSON, YAML, YML, KYAML, CSV, XML.",
-                        "URLs need not end in a file extension; the server's downloaded filename determines the format. Supported: JSON, YAML, YML, KYAML, CSV, XML.",
-                      )}
-                    </p>
-                    <p className="subtle">
-                      {t(
-                        "Browser geben keinen absoluten Dateipfad preis. Ohne Pfadangabe wird jeder Import als neue Quelle angelegt; gleiche Dateinamen werden nicht zusammengeführt. Mit Pfad identifiziert der volle Pfad die Quelle für den vollständigen Ersatz beim Reimport. Das Nachladen-Symbol einer lokalen Quelle öffnet die Dateiauswahl neu: Die frisch gewählte Datei muss denselben Dateinamen tragen und ersetzt genau diese Quelle (einschließlich aller YAML-Teile); eine abweichende Auswahl oder ein abgebrochener Dialog lässt die Daten unverändert.",
-                        "Browsers do not expose absolute file paths. Without a path each import creates a new source; equal file names are never merged. With a path, the full path identifies the source for complete replacement on reimport. A local source's reload icon reopens file selection: the freshly chosen file must carry the same filename and replaces exactly that source (including all YAML parts); a mismatched selection or dismissed dialog leaves the data untouched.",
-                      )}
-                    </p>
-                  </div>
-                )}
+                <Dialog.Root open={urlHelpOpen} onOpenChange={setUrlHelpOpen}>
+                  <Dialog.Portal>
+                    <Dialog.Backdrop className="dialog-backdrop" />
+                    <Dialog.Popup className="dialog url-help-dialog">
+                      <div className="dialog-heading">
+                        <Dialog.Title>{t("Hilfe zu Web-Quellen", "Web source help")}</Dialog.Title>
+                        <Dialog.Close
+                          className="icon-button"
+                          aria-label={t("Schließen", "Close")}
+                        >
+                          <XMarkIcon />
+                        </Dialog.Close>
+                      </div>
+                      <Dialog.Description>
+                        {t(
+                          "So funktionieren Web-Quellen und das Nachladen lokaler Dateien.",
+                          "How web sources and local file reload work.",
+                        )}
+                      </Dialog.Description>
+                      <p className="subtle">
+                        {t(
+                          "URLs müssen nicht auf eine Dateiendung enden; der vom Server geladene Dateiname bestimmt das Format. Unterstützt: JSON, YAML, YML, KYAML, CSV, XML.",
+                          "URLs need not end in a file extension; the server's downloaded filename determines the format. Supported: JSON, YAML, YML, KYAML, CSV, XML.",
+                        )}
+                      </p>
+                      <p className="subtle">
+                        {t(
+                          "Browser geben keinen absoluten Dateipfad preis. Ohne Pfadangabe wird jeder Import als neue Quelle angelegt; gleiche Dateinamen werden nicht zusammengeführt. Mit Pfad identifiziert der volle Pfad die Quelle für den vollständigen Ersatz beim Reimport.",
+                          "Browsers do not expose absolute file paths. Without a path each import creates a new source; equal file names are never merged. With a path, the full path identifies the source for complete replacement on reimport.",
+                        )}
+                      </p>
+                      <p className="subtle">
+                        {t(
+                          "Das Nachladen-Symbol einer lokalen Quelle liest die Datei automatisch neu ein, sobald der Browser Dateizugriffe für diese Sitzung behält: Der aktuelle Dateiinhalt wird frisch geladen und ersetzt genau diese Quelle (einschließlich aller YAML-Teile). Wird kein Zugriff behalten oder unterstützt der Browser das nicht, öffnet sich die Dateiauswahl; die frisch gewählte Datei muss denselben Dateinamen tragen. Die Zugriffsrechte gelten nur für diese Sitzung und gehen beim Neuladen der Seite verloren. Eine abweichende Auswahl, ein abgebrochener Dialog oder ein Lesefehler lässt die Daten unverändert.",
+                          "A local source's reload icon re-reads the file automatically whenever the browser retains file access for this session: the current file contents are loaded fresh and replace exactly that source (including all YAML parts). When no access is retained or the browser lacks support, file selection opens instead; the freshly chosen file must carry the same filename. Access grants last only for this session and are lost on page reload. A mismatched selection, dismissed dialog or read error leaves the data untouched.",
+                        )}
+                      </p>
+                      <Dialog.Close className="done-button">
+                        {t("Fertig", "Done")}
+                      </Dialog.Close>
+                    </Dialog.Popup>
+                  </Dialog.Portal>
+                </Dialog.Root>
                 <span className="url-field">
                   <input
                     type="url"
@@ -1143,7 +1497,7 @@ function WorkspaceApp() {
                   setViews([
                     ...views,
                     {
-                      id: crypto.randomUUID(),
+                      id: newId("view"),
                       name: viewName.trim(),
                       columns,
                       filters: withFilters ? filters : [],
@@ -1688,13 +2042,15 @@ function WorkspaceApp() {
             </button>
             {!source && (
               <div className="empty-actions">
-                <button onClick={() => fileInput.current?.click()}>
-                  <FolderIcon />
+                <button onClick={() => void openFileViaPicker()}>
+                  <DocumentPlusIcon />
                   {t("Datei öffnen", "Open file")}
                 </button>
               </div>
             )}
           </div>
+        )}
+        </div>
         )}
         <footer>
           <span>
@@ -1749,216 +2105,6 @@ function WorkspaceApp() {
             <Dialog.Description>{detail?.path.join(" › ")}</Dialog.Description>
             {detail?.dataset && detail.record !== undefined && <button disabled={working} onClick={() => void deleteImported("record")}>{t("Datensatz löschen", "Delete record")}</button>}
             {detail && (detail.dataset && detail.record !== undefined && storage.current ? <StoredRecordTree client={storage.current} dataset={detail.dataset} record={detail.record} language={language} /> : <RecordTree value={detail.row} />)}
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
-      <Dialog.Root open={settings} onOpenChange={setSettings}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="dialog-backdrop" />
-          <Dialog.Popup className="dialog">
-            <div className="dialog-heading">
-              <Dialog.Title>{t("Einstellungen", "Settings")}</Dialog.Title>
-              <Dialog.Close
-                className="icon-button"
-                aria-label={t("Schließen", "Close")}
-              >
-                <XMarkIcon />
-              </Dialog.Close>
-            </div>
-            <Dialog.Description>
-              {t(
-                "Dein Workspace, so wie du ihn brauchst.",
-                "Your workspace, just how you need it.",
-              )}
-            </Dialog.Description>
-            <section className="settings-group" aria-labelledby="settings-general">
-            <h3 id="settings-general">{t("Allgemein", "General")}</h3>
-            <label>
-              {t("Sprache", "Language")}
-              <select
-                value={language}
-                onChange={(e) => setLanguage(e.target.value as "de" | "en")}
-              >
-                <option value="de">Deutsch</option>
-                <option value="en">English</option>
-              </select>
-            </label>
-            <PwaSettings language={language} working={working} pwa={pwa} />
-            </section>
-            <section className="settings-group" aria-labelledby="settings-display">
-            <h3 id="settings-display">{t("Anzeige", "Display")}</h3>
-            <label className="timeline-toggle">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={showTimeline}
-                onChange={(event) => setShowTimeline(event.target.checked)}
-              />
-              {t("Zeitstrahl anzeigen", "Show timeline")}
-            </label>
-            {(["start", "end"] as const).map((kind) => (
-              <label key={kind}>
-                {kind === "start" ? t("Startzeit-Feld", "Start time field") : t("Endzeit-Feld", "End time field")}
-                <select
-                  value={timeColumns[kind]}
-                  disabled={!source}
-                  onChange={(event) => setTimeColumnsBySource((previous) => ({
-                    ...previous,
-                    [source]: { ...timeColumns, [kind]: event.target.value },
-                  }))}
-                >
-                  <option value="">{t("Bitte auswählen", "Please select")}</option>
-                  {[...allColumns].sort((a, b) => a.localeCompare(b, language, { numeric: true })).map((column) => (
-                    <option key={column} value={column}>{column}</option>
-                  ))}
-                </select>
-              </label>
-            ))}
-            <p className="subtle">
-              {t("Zeitfelder werden anhand üblicher Feldnamen vorausgewählt. Die Zuordnung gilt für die aktuelle Quelle.", "Time fields are preselected using common field names. The mapping applies to the current source.")}
-            </p>
-            <label>
-              {t("Einfärbung nach", "Color by")}
-              <select value={colorColumn} onChange={(event) => setColorColumn(event.target.value)}>
-                {!allColumns.includes(colorColumn) && (
-                  <option value={colorColumn}>{colorColumn}</option>
-                )}
-                {[...allColumns].sort((a, b) => a.localeCompare(b, language, { numeric: true })).map((column) => (
-                  <option key={column} value={column}>{column}</option>
-                ))}
-              </select>
-            </label>
-            <p className="subtle">
-              {t(
-                "Gleiche Werte erhalten im Zeitstrahl und in der gewählten Tabellenspalte dieselbe Farbe.",
-                "Matching values share a color in the timeline and the selected table column.",
-              )}
-            </p>
-            </section>
-            <section className="settings-group" aria-labelledby="settings-sources">
-            <h3 id="settings-sources">{t("Datenquellen", "Data sources")}</h3>
-            <h4>{t("CSV-Format", "CSV format")}</h4>
-            <label>
-              {t("Trennzeichen", "Delimiter")}
-              <select value={csvOptions.delimiter} onChange={(event) => setCsvOptions((previous) => ({ ...previous, delimiter: event.target.value as CsvOptions["delimiter"] }))}>
-                <option value="auto">{t("Automatisch", "Automatic")}</option>
-                <option value=",">{t("Komma", "Comma")}</option>
-                <option value=";">{t("Semikolon", "Semicolon")}</option>
-                <option value={"\t"}>{t("Tabulator", "Tab")}</option>
-                <option value="|">{t("Senkrechter Strich |", "Pipe |")}</option>
-              </select>
-            </label>
-            <label>
-              {t("Textbegrenzungszeichen", "Quote character")}
-              <select value={csvOptions.quote} onChange={(event) => setCsvOptions((previous) => ({ ...previous, quote: event.target.value as CsvOptions["quote"] }))}>
-                <option value={'"'}>{t('Doppelte Anführungszeichen (")', 'Double quotes (")')}</option>
-                <option value="'">{t("Einfache Anführungszeichen (')", "Single quotes (')")}</option>
-                <option value="">{t("Keine", "None")}</option>
-              </select>
-            </label>
-            <label className="timeline-toggle">
-              <input type="checkbox" checked={csvOptions.header} onChange={(event) => setCsvOptions((previous) => ({ ...previous, header: event.target.checked }))} />
-              {t("Erste Zeile enthält Spaltennamen", "First row contains column names")}
-            </label>
-            <p className="subtle">{t("Gilt für CSV-Import und -Export. Automatisch verwendet beim Export Komma. Ohne Kopfzeile heißen importierte Spalten Column1, Column2 usw. Werte bleiben als Text erhalten.", "Applies to CSV import and export. Automatic uses commas for export. Without a header, imported columns are named Column1, Column2, etc. Values remain text.")}</p>
-            <button type="button" onClick={() => setCsvOptions({ ...defaultCsvOptions })}>{t("CSV-Defaults wiederherstellen", "Restore CSV defaults")}</button>
-            <div className="settings-divider" />
-            <h3><CircleStackIcon />{t("Datenbanken", "Databases")}</h3>
-            <button
-              type="button"
-              disabled={working}
-              onClick={() => {
-                const profile: ConnectorProfile = { id: newProfileId(), name: t("Neue Datenbank", "New database"), kind: "postgres", endpoint: "" };
-                setConnectors((previous) => [...previous, profile]);
-                setExpandedConnector(profile.id);
-              }}
-            >
-              <PlusIcon />
-              {t("Datenbank hinzufügen +", "Add database +")}
-            </button>
-            {connectors.map((profile) => {
-              const expanded = expandedConnector === profile.id;
-              return (
-                <div key={profile.id}>
-                  <div className="source-option">
-                    <CircleStackIcon aria-hidden="true" />
-                    <span className="source-name">{profile.name}</span>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      title={t(`Verbindung „${profile.name}“ löschen`, `Delete connection “${profile.name}”`)}
-                      aria-label={t(`Verbindung „${profile.name}“ löschen`, `Delete connection “${profile.name}”`)}
-                      disabled={working}
-                      onClick={() => {
-                        if (!window.confirm(t(`Verbindung „${profile.name}“ löschen?`, `Delete connection “${profile.name}”?`))) return;
-                        setConnectors((previous) => previous.filter((entry) => entry.id !== profile.id));
-                        if (expandedConnector === profile.id) setExpandedConnector(null);
-                        if (connectorChoice === profile.id) { setConnectorChoice(""); setConnectorSource(""); setConnectorSources([]); }
-                      }}
-                    >
-                      <TrashIcon />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-button source-chevron"
-                      title={expanded ? t("Einstellungen einklappen", "Collapse settings") : t("Einstellungen bearbeiten", "Edit settings")}
-                      aria-label={expanded ? t("Einstellungen einklappen", "Collapse settings") : t("Einstellungen bearbeiten", "Edit settings")}
-                      aria-expanded={expanded}
-                      onClick={() => setExpandedConnector(expanded ? null : profile.id)}
-                    >
-                      <ChevronDownIcon className={expanded ? "" : "rotated"} />
-                    </button>
-                  </div>
-                  {expanded && (
-                    <div className="inline-panel">
-                      <label>
-                        {t("Name", "Name")}
-                        <input
-                          value={profile.name}
-                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, name: e.target.value } : entry))}
-                        />
-                      </label>
-                      <label>
-                        {t("Typ", "Type")}
-                        <select
-                          value={profile.kind}
-                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, kind: e.target.value as ConnectorProfile["kind"] } : entry))}
-                        >
-                          <option value="postgres">PostgreSQL</option>
-                          <option value="mariadb">MariaDB</option>
-                          <option value="ndjson">NDJSON</option>
-                        </select>
-                      </label>
-                      <label>
-                        {profile.kind === "ndjson" ? "URL" : t("Connector-URL", "Connector URL")}
-                        <input
-                          type="url"
-                          value={profile.endpoint}
-                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, endpoint: e.target.value } : entry))}
-                          placeholder={profile.kind === "ndjson" ? "https://example.org/records" : "http://127.0.0.1:8787"}
-                        />
-                      </label>
-                      <p className="subtle">
-                        {profile.kind === "ndjson"
-                          ? t("Tokens werden nicht gespeichert und gelten nur für den laufenden Import.", "Tokens are not stored and apply only to the running import.")
-                          : t("Zugangsdaten liegen ausschließlich im Connector-Backend. Gespeichert werden nur Name, Typ und URL.", "Credentials stay in the connector backend. Only name, type and URL are stored.")}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            <div className="settings-divider" />
-            <h3><CircleStackIcon />{t("Lokaler Datenspeicher", "Local data storage")}</h3>
-            {storageStats && <p>{t("Datenbank", "Database")}: {(storageStats.databaseBytes / 2 ** 20).toFixed(1)} MiB · {t("Geschätzter freier Browserspeicher", "Estimated available browser storage")}: {storageStats.quota ? ((storageStats.quota - (storageStats.usage ?? 0)) / 2 ** 30).toFixed(1) + " GiB" : "—"} · {storageStats.persisted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Speicherung unterliegt Browserbereinigung", "Storage subject to browser eviction")}</p>}
-            <p>{t("Importierte Dateien bleiben lokal in diesem Browser gespeichert. Die Originaldatei wird nicht zusätzlich kopiert.", "Imported files persist locally in this browser. Original files are not duplicated.")}</p>
-            <button onClick={() => { void navigator.storage?.persist().then((granted) => setNotice(granted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Browser hat dauerhaften Speicher nicht gewährt", "Browser did not grant persistent storage"))); }}>{t("Dauerhaften Browserspeicher anfragen", "Request persistent browser storage")}</button>
-            {selectedDataset && <button disabled={working} onClick={() => void deleteImported("source")}>{t("Ausgewählte Quelle löschen", "Delete selected source")}</button>}
-            <button disabled={working} onClick={() => void deleteImported("all")}>{t("Alle importierten Daten löschen", "Delete all imported data")}</button>
-            </section>
-            <Dialog.Close className="done-button">
-              {t("Fertig", "Done")}
-            </Dialog.Close>
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>

@@ -9,6 +9,7 @@ import { ingest, ingestConnector, ingestFromUrl, ingestYamlDocuments, projection
 import { ndjsonParser } from "../ingestion/http";
 import { sources } from "../ingestion/connectors";
 import { exportData } from "./export";
+import { newId } from "../ids";
 import { formatFor, type ConfirmImport, type Dataset, type ImportDecision, type Request } from "../ingestion/contracts";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -118,7 +119,7 @@ self.onmessage = async ({
   const controller = new AbortController();
   active = { id: data.id, controller };
   const confirm: ConfirmImport = (warning) => new Promise((resolve) => {
-    const token = crypto.randomUUID(); pendingWarning = { token, resolve };
+    const token = newId("warn"); pendingWarning = { token, resolve };
     self.postMessage({ id: data.id, warning, token });
   });
   try {

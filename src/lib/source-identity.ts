@@ -1,4 +1,5 @@
 import type { Dataset } from "./ingestion/contracts";
+import { newId } from "./ids";
 
 export type ConnectorKind = "postgres" | "mariadb" | "ndjson";
 
@@ -16,19 +17,11 @@ export type SourceIdentity =
   | { kind: "connector"; connectorId: string; connectorName: string; sourceName: string };
 
 export function newLocalGroupId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `local-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-  }
+  return newId("local");
 }
 
 export function newProfileId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `connector-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-  }
+  return newId("connector");
 }
 
 export function readConnectorProfiles(): ConnectorProfile[] {

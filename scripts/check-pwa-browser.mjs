@@ -111,17 +111,15 @@ async function openSettings(page) {
       );
     byTitle?.click();
   });
-  await page.waitForSelector(".dialog", { timeout: 10000 });
+  await page.waitForSelector(".settings-page", { timeout: 10000 });
 }
 
 async function closeSettings(page) {
   await page.evaluate(() => {
-    const done = [...document.querySelectorAll(".dialog button")].find(
-      (b) => b.textContent === "Fertig" || b.textContent === "Done",
-    );
-    done?.click();
+    const back = document.querySelector('.settings-back');
+    back?.click();
   });
-  await page.waitForFunction(() => !document.querySelector(".dialog") || !document.querySelector(".pwa-settings"), { timeout: 10000 });
+  await page.waitForFunction(() => !document.querySelector(".settings-page"), { timeout: 10000 });
 }
 
 async function cacheUrls(page) {
@@ -390,7 +388,7 @@ try {
   const settingsCopy = await page.evaluate(() => document.querySelector(".pwa-settings")?.textContent ?? "");
   assert.match(settingsCopy, /Eine neue Version ist bereit/, "settings must keep the deferred update pending");
   const settingsUpdate = await page.evaluate(() => {
-    const btn = [...document.querySelectorAll(".dialog button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
+    const btn = [...document.querySelectorAll(".settings-page button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
     return btn ? { disabled: btn.disabled, text: btn.textContent } : null;
   });
   assert.ok(settingsUpdate, "settings update action must exist after defer");
@@ -403,13 +401,13 @@ try {
   await (await page.$("input[type=file]")).uploadFile(bigFixture);
   await page.waitForSelector(".import-warning", { timeout: 30000 });
   const guardDisabled = await page.evaluate(() => {
-    const btn = [...document.querySelectorAll(".dialog button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
+    const btn = [...document.querySelectorAll(".settings-page button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
     return btn ? btn.disabled : "missing";
   });
   assert.equal(guardDisabled, true, "update must be disabled while the import warning is active");
   await page.evaluate(() => { window.__pwaGuardSentinel = "guarded"; });
   await page.evaluate(() => {
-    const btn = [...document.querySelectorAll(".dialog button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
+    const btn = [...document.querySelectorAll(".settings-page button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
     btn?.click();
   });
   assert.equal(await page.evaluate(() => window.__pwaGuardSentinel ?? null), "guarded", "forced click on disabled update must not navigate");
@@ -421,7 +419,7 @@ try {
   });
   await page.waitForFunction(() => !document.querySelector(".import-warning"), { timeout: 30000 });
   await page.waitForFunction(
-    () => [...document.querySelectorAll(".dialog button")].some((b) => ((b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update")) && !b.disabled),
+    () => [...document.querySelectorAll(".settings-page button")].some((b) => ((b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update")) && !b.disabled),
     { timeout: 30000 },
   );
 
@@ -429,7 +427,7 @@ try {
   await Promise.all([
     page.waitForNavigation({ waitUntil: "networkidle0", timeout: 60000 }),
     page.evaluate(() => {
-      [...document.querySelectorAll(".dialog button")]
+      [...document.querySelectorAll(".settings-page button")]
         .find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"))
         ?.click();
     }),
@@ -464,23 +462,23 @@ try {
   });
   await openSettings(page);
   const installVisible = await page.evaluate(() =>
-    [...document.querySelectorAll(".dialog button")].some((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")),
+    [...document.querySelectorAll(".settings-page button")].some((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")),
   );
   assert.equal(installVisible, true, "synthetic prompt must surface the real Install control");
   await page.evaluate(() => {
-    [...document.querySelectorAll(".dialog button")]
+    [...document.querySelectorAll(".settings-page button")]
       .find((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens"))
       ?.click();
   });
   await page.waitForFunction(() => window.__promptCalls === 1, { timeout: 10000 });
   await page.waitForFunction(
-    () => ![...document.querySelectorAll(".dialog button")].some((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")),
+    () => ![...document.querySelectorAll(".settings-page button")].some((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")),
     { timeout: 10000 },
   );
   assert.equal(await page.evaluate(() => window.__promptCalls), 1, "one-shot prompt must be called exactly once");
   // Repeated clicks cannot reuse the consumed event: no new prompt call.
   await page.evaluate(() => {
-    [...document.querySelectorAll(".dialog button")].forEach((b) => {
+    [...document.querySelectorAll(".settings-page button")].forEach((b) => {
       if ((b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")) b.click();
     });
   });
@@ -497,11 +495,11 @@ try {
     window.dispatchEvent(event);
   });
   await page.waitForFunction(
-    () => [...document.querySelectorAll(".dialog button")].some((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")),
+    () => [...document.querySelectorAll(".settings-page button")].some((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens")),
     { timeout: 10000 },
   );
   await page.evaluate(() => {
-    [...document.querySelectorAll(".dialog button")]
+    [...document.querySelectorAll(".settings-page button")]
       .find((b) => (b.textContent ?? "").includes("DLens installieren") || (b.textContent ?? "").includes("Install DLens"))
       ?.click();
   });
@@ -530,16 +528,16 @@ try {
         document.querySelector('button[title="Settings"]');
       byTitle?.click();
     });
-    await installedPage.waitForSelector(".dialog", { timeout: 10000 });
+    await installedPage.waitForSelector(".settings-page", { timeout: 10000 });
     const installedCopy = await installedPage.evaluate(() => document.querySelector(".pwa-settings")?.textContent ?? "");
     assert.match(installedCopy, /DLens ist als App installiert/, "injected standalone flag must render the installed state");
   } finally {
     await installedPage.close().catch(() => {});
   }
 
-  // Screenshots: desktop + mobile with the settings dialog confirmed open.
+  // Screenshots: desktop + mobile with the settings page confirmed open.
   await page.setViewport({ width: 1280, height: 900 });
-  await page.waitForSelector(".dialog", { timeout: 10000 });
+  await page.waitForSelector(".settings-page", { timeout: 10000 });
   await page.screenshot({ path: join(ARTIFACTS, "settings-desktop.png"), fullPage: true });
   // DE/EN strings via the existing language select; no horizontal overflow.
   await page.select(".settings-group select", "en");
@@ -556,11 +554,11 @@ try {
     toggle?.click();
   });
   await page.setViewport({ width: 390, height: 844, isMobile: true });
-  if (!(await page.evaluate(() => document.querySelector(".dialog") !== null))) {
+  if (!(await page.evaluate(() => document.querySelector(".settings-page") !== null))) {
     await page.waitForSelector('button[title="Einstellungen"], button[title="Settings"]', { timeout: 30000 });
     await openSettings(page);
   }
-  await page.waitForSelector(".dialog", { timeout: 10000 });
+  await page.waitForSelector(".settings-page", { timeout: 10000 });
   const overflowMobile = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
   assert.equal(overflowMobile, true, "mobile settings must not overflow horizontally");
   await page.screenshot({ path: join(ARTIFACTS, "settings-mobile.png"), fullPage: true });

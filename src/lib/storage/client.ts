@@ -1,4 +1,5 @@
 import type { Progress, Request, ConfirmImport } from "../ingestion/contracts";
+import { newId } from "../ids";
 export class StorageClient {
   private worker: Worker;
   private queue: Promise<unknown> = Promise.resolve();
@@ -96,7 +97,7 @@ export class StorageClient {
               reject(new Error("Superseded query"));
               return;
             }
-            const id = crypto.randomUUID();
+            const id = newId("req");
             this.current = id;
             this.callbacks.set(id, {
               resolve: (value) => resolve(value as T),

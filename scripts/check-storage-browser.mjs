@@ -128,7 +128,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll("button")].find(b => b.textContent.includes("Datenbank hinzufügen")).click());
   await page.waitForSelector('.settings-group input[type=url]');
   await page.type('.settings-group input[type=url]', endpoint.replace(/\/records.*$/, ""));
-  await page.evaluate(() => [...document.querySelectorAll("button")].find(b => b.textContent === "Fertig").click());
+  await page.click(".settings-back");
   await page.click(".source-button");
   await page.select(".sources select", await page.$eval(".sources select option:nth-child(2)", el => el.value));
   await page.type(".sources input[type=password]", "browser-test-token-00000000000000");
@@ -236,8 +236,8 @@ try {
       { timeout: 30000 },
     );
     await page.click(".url-form .url-info");
-    await page.waitForSelector("#url-help");
-    const helpText = await page.$eval("#url-help", (el) => el.textContent);
+    await page.waitForSelector(".url-help-dialog");
+    const helpText = await page.$eval(".url-help-dialog", (el) => el.textContent);
     assert.match(helpText, /Dateiname|downloaded filename/i);
     const rowsBeforeHelp = await page.$$eval("tbody tr", (rows) => rows.length);
     await new Promise((resolve) => setTimeout(resolve, 500));

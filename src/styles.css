@@ -209,17 +209,14 @@ button.primary:hover {
   width: 35px;
   height: 35px;
   border-radius: 10px;
-  font-size: 25px;
-  font-weight: 650;
+  overflow: hidden;
+  flex-shrink: 0;
 }
-.brand-mark span {
-  position: absolute;
-  width: 8px;
-  height: 3px;
-  background: #b7c7ff;
-  border-radius: 3px;
-  bottom: 9px;
-  right: 5px;
+.brand-mark img {
+  width: 35px;
+  height: 35px;
+  border-radius: 10px;
+  display: block;
 }
 .brand-divider {
   height: 22px;
@@ -1082,6 +1079,84 @@ footer > span {
 }
 .dialog-heading button {
   border: 0;
+}
+/* URL help uses the same Dialog pattern with a readable width; the content
+   scrolls inside the dialog on small viewports. */
+.url-help-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+.url-help-dialog .subtle {
+  margin: 12px 0 0;
+  line-height: 1.7;
+}
+.url-help-dialog .done-button {
+  margin-top: 22px;
+}
+/* Same-page settings occupy the workspace area with the controls shell. */
+.settings-page > h2 {
+  font-size: 20px;
+  margin: 14px 0 6px;
+}
+.settings-page > .subtle {
+  margin-bottom: 4px;
+}
+.settings-page label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 14px 0;
+}
+.settings-page label.timeline-toggle {
+  flex-direction: row;
+  align-items: center;
+}
+.settings-page button {
+  margin: 4px 8px 4px 0;
+}
+.settings-back {
+  align-self: flex-start;
+}
+/* Same-page settings transition: subtle opacity fade with 12px horizontal
+   motion over 180ms. Entering eases out, closing reverses with ease-in
+   before settings unmounts; the header stays outside the animated area. */
+@keyframes settings-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes settings-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+.settings-enter {
+  animation: settings-in 180ms ease-out;
+}
+.settings-exit {
+  animation: settings-out 180ms ease-in;
+  pointer-events: none;
+}
+.workspace-enter {
+  animation: settings-in 180ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-enter,
+  .settings-exit,
+  .workspace-enter {
+    animation: none;
+  }
 }
 .dialog > p {
   font-size: 12px;

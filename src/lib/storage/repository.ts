@@ -21,6 +21,7 @@ import {
   type QueryResult,
   type ChildPage,
 } from "../ingestion/contracts";
+import { newId } from "../ids";
 
 const encoder = new TextEncoder();
 export class Repository {
@@ -156,8 +157,8 @@ export class Repository {
     return JSON.parse(String(raw));
   }
   begin(name: string, format: string, replace?: string) {
-    const id = replace ?? crypto.randomUUID(),
-      generation = crypto.randomUUID();
+    const id = replace ?? newId("dataset"),
+      generation = newId("import");
     if (replace) this.dataset(replace);
     this.db.transaction(() => {
       this.db.exec({
