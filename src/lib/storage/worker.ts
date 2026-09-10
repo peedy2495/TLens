@@ -5,11 +5,11 @@ import sqlite3InitModule, {
 } from "@sqlite.org/sqlite-wasm";
 import wasmUrl from "@sqlite.org/sqlite-wasm/sqlite3.wasm?url";
 import { Repository } from "./repository";
-import { ingest, ingestConnector, ingestYamlDocuments, projectionWithWarnings } from "../ingestion/service";
+import { ingest, ingestConnector, ingestFromUrl, ingestYamlDocuments, projectionWithWarnings } from "../ingestion/service";
 import { ndjsonParser } from "../ingestion/http";
 import { sources } from "../ingestion/connectors";
 import { exportData } from "./export";
-import { formatFor, type ConfirmImport, type ImportDecision, type Request } from "../ingestion/contracts";
+import { formatFor, type ConfirmImport, type Dataset, type ImportDecision, type Request } from "../ingestion/contracts";
 
 declare const self: DedicatedWorkerGlobalScope;
 let repository: Promise<Repository> | undefined;
@@ -176,7 +176,8 @@ self.onmessage = async ({
           );
         if (formatFor(request.file) === "yaml") {
           result = await ingestYamlDocuments(repo, request.file, request.csv, controller.signal,
-            (progress) => self.postMessage({ id: data.id, progress }), request.language, confirm);
+            (progress) => self.postMessage({ id: data.id, progress }), request.language, confirm,
+            request.source, request.displayName);
           break;
         }
         result = await ingest(
@@ -187,11 +188,19 @@ self.onmessage = async ({
           (progress) => self.postMessage({ id: data.id, progress }),
           request.replace,
           confirm,
+          request.source,
+          request.displayName,
         );
         break;
       }
+      case "url-import": {
+        result = await ingestFromUrl(repo, request.url, request.csv, controller.signal,
+          (progress) => self.postMessage({ id: data.id, progress }), request.language, confirm,
+          request.source, request.displayName);
+        break;
+      }
       case "remote": {
-        result = await ingestConnector(
+        const dataset = await ingestConnector(
           repo,
           sources.open("http", { url: request.url, token: request.token }),
           request.name || new URL(request.url).hostname,
@@ -200,9 +209,44 @@ self.onmessage = async ({
           controller.signal,
           (progress) => self.postMessage({ id: data.id, progress }),
           ndjsonParser,
+          request.replace,
+          confirm,
+        );
+        if (request.source) {
+          const updated: Dataset = { ...dataset, source: request.source };
+          repo.db.exec({ sql: "UPDATE datasets SET metadata=? WHERE id=?", bind: [JSON.stringify(updated), dataset.id] });
+          result = updated;
+        } else result = dataset;
+        break;
+      }
+      case "connector-pull": {
+        const endpoint = request.kind === "ndjson"
+          ? request.endpoint
+          : `${request.endpoint.replace(/\/+$/, "")}/records?table=${encodeURIComponent(request.sourceName)}`;
+        const name = `${request.profileName} · ${request.sourceName}`;
+        const dataset = await ingestConnector(
+          repo,
+          sources.open("http", { url: endpoint, token: request.token }),
+          name,
+          "api",
+          0,
+          controller.signal,
+          (progress) => self.postMessage({ id: data.id, progress }),
+          ndjsonParser,
           undefined,
           confirm,
         );
+        const updated: Dataset = {
+          ...dataset,
+          source: {
+            kind: "connector",
+            connectorId: request.profileId,
+            connectorName: request.profileName,
+            sourceName: request.sourceName,
+          },
+        };
+        repo.db.exec({ sql: "UPDATE datasets SET metadata=? WHERE id=?", bind: [JSON.stringify(updated), dataset.id] });
+        result = updated;
         break;
       }
       case "jazz": {

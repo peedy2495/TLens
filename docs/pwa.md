@@ -1,6 +1,12 @@
 # DLens PWA
 
 DLens is an installable, offline-capable Progressive Web App (static build only).
+The chrome follows the resolved theme: a saved `dlens-dark` boolean wins,
+otherwise `prefers-color-scheme` applies and is followed live. Manual toggles
+update `documentElement.dataset.theme` and `<meta name="theme-color">`
+immediately (`#f7f9fc` light, `#131820` dark) and persist; automatic choices are
+never stored. An inline head script applies the same resolution before first
+paint. The manifest keeps the light `#f7f9fc` as static `theme_color` fallback.
 
 ## What is cached
 
@@ -14,9 +20,12 @@ Production `npm run build` generates `dist/manifest.webmanifest`, `dist/sw.js`
 - the generated manifest itself
 
 Per-file ceiling: 5 MiB. No runtime caching: demos, user files, credentials and
-HTTP/API responses are never cached. Navigation fallback serves `/` **only**
+HTTP/API responses are never cached – this includes `/api/import-url` relay
+payloads, which always hit the network. Navigation fallback serves `/` **only**
 for the root path with an optional query string; `/api/*` and other paths
-return 404.
+return 404. In production `/api/import-url` is served by the Vercel function
+(`api/import-url.mjs`), never by the service worker; offline URL imports fail
+with the regular actionable import error.
 
 ## Install and update
 

@@ -166,7 +166,7 @@ try {
   assert.equal(manifest.start_url, "/");
   assert.equal(manifest.scope, "/");
   assert.equal(manifest.display, "standalone");
-  assert.equal(manifest.theme_color, "#f97316");
+  assert.equal(manifest.theme_color, "#f7f9fc");
   const sizes = Object.fromEntries(manifest.icons.map((icon) => [icon.sizes, icon]));
   assert.ok(sizes["192x192"]);
   assert.ok(sizes["512x512"]);
@@ -200,6 +200,22 @@ try {
   const linkCount = await page.$$eval('link[rel="manifest"]', (els) => els.map((el) => el.getAttribute("href")));
   assert.equal(linkCount.length, 1, "exactly one manifest link");
   assert.equal(linkCount[0], "/manifest.webmanifest");
+
+  // Theme follows the system until a manual choice overrides it, including reloads.
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+  assert.equal(await page.$eval('meta[name="theme-color"]', el => el.content), "#131820");
+  assert.equal(await page.evaluate(() => localStorage.getItem("dlens-dark")), null);
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+  assert.equal(await page.$eval('meta[name="theme-color"]', el => el.content), "#f7f9fc");
+  await page.click('[aria-label="Dunkelmodus"]');
+  await page.waitForFunction(() => localStorage.getItem("dlens-dark") === "true");
+  await page.reload({ waitUntil: "networkidle0" });
+  assert.equal(await page.$eval('meta[name="theme-color"]', el => el.content), "#131820");
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+  await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "dark");
 
   // CDP installability (best effort: report, do not fail headless quirks).
   try {

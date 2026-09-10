@@ -20,11 +20,13 @@ import {
   ChevronRightIcon,
   CircleStackIcon,
   ClockIcon,
+  CloudIcon,
   Cog6ToothIcon,
   DocumentChartBarIcon,
   EyeIcon,
   FolderIcon,
   FunnelIcon,
+  InformationCircleIcon,
   MagnifyingGlassIcon,
   MoonIcon,
   PlusIcon,
@@ -59,6 +61,26 @@ import { StoredRecordTree } from "./StoredRecordTree";
 import { RecordTree } from "./RecordTree";
 import { PwaSettings } from "./PwaSettings";
 import { usePwa } from "../lib/pwa";
+import { applyTheme, persistThemeChoice, readThemePreference, resolveTheme, systemPrefersDark } from "../lib/theme";
+import {
+  canonicalUrl,
+  connectorIdentityFor,
+  displayNameFor,
+  discoverConnectorSources,
+  filenameFromUrl,
+  findIdentityMatches,
+  findLocalReloadTargets,
+  genuineFilePath,
+  isLocalFileDataset,
+  localIdentityFor,
+  newLocalGroupId,
+  newProfileId,
+  readConnectorProfiles,
+  saveConnectorProfiles,
+  urlIdentityFor,
+  validateLocalReloadSelection,
+  type ConnectorProfile,
+} from "../lib/source-identity";
 import { DLensAccount } from "../lib/jazz";
 import { StorageClient } from "../lib/storage/client";
 import { downloadStorage } from "../lib/storage/download";
@@ -98,7 +120,8 @@ function WorkspaceApp() {
     readStored("dlens-language", "de"),
   );
   const t = (de: string, en: string) => (language === "de" ? de : en);
-  const [dark, setDark] = useState(() => readStored("dlens-dark", false));
+  const [dark, setDark] = useState(() => resolveTheme());
+  const manualTheme = useRef(readThemePreference() !== null);
   const [files, setFiles] = useState<Dataset[]>([]);
   const storage = useRef<StorageClient | null>(null);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -117,8 +140,23 @@ function WorkspaceApp() {
   const [working, setWorking] = useState(false);
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [remoteUrl, setRemoteUrl] = useState("");
-  const [remoteToken, setRemoteToken] = useState("");
+  const [connectors, setConnectors] = useState<ConnectorProfile[]>(() => readConnectorProfiles());
+  const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
+  const [urlInput, setUrlInput] = useState("");
+  const [urlHelpOpen, setUrlHelpOpen] = useState(false);
+  const [localPath, setLocalPath] = useState("");
+  const [connectorChoice, setConnectorChoice] = useState("");
+  const [connectorSource, setConnectorSource] = useState("");
+  const [connectorSources, setConnectorSources] = useState<string[]>([]);
+  const [connectorToken, setConnectorToken] = useState("");
+  const [connectorLoading, setConnectorLoading] = useState(false);
+  const discoveryController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    discoveryController.current?.abort();
+    setConnectorLoading(false);
+    return () => discoveryController.current?.abort();
+  }, [connectorChoice]);
+  useEffect(() => { saveConnectorProfiles(connectors); }, [connectors]);
   const [storageStats, setStorageStats] = useState<{ databaseBytes: number; quota?: number; usage?: number; persisted: boolean } | null>(null);
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState("");
@@ -181,15 +219,56 @@ function WorkspaceApp() {
   const pwa = usePwa(working);
   const showPwaUpdate = pwa.updateAvailable && !pwa.updateDeferred;
   const fileInput = useRef<HTMLInputElement>(null);
+  const localReloadInput = useRef<HTMLInputElement>(null);
+  const pendingLocalReload = useRef<string | null>(null);
+  useEffect(() => {
+    // Dismissing the reload picker fires no change event: drop the pending
+    // target so it can never leak into a later ordinary import.
+    const element = localReloadInput.current;
+    if (!element) return;
+    const onCancel = () => { pendingLocalReload.current = null; };
+    element.addEventListener("cancel", onCancel);
+    return () => element.removeEventListener("cancel", onCancel);
+  }, []);
   const searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const view = views.find((v) => v.default);
     if (view) applyView(view);
   }, []);
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("dlens-dark", JSON.stringify(dark));
+    applyTheme(dark);
   }, [dark]);
+  useEffect(() => {
+    // Follow the operating system while no manual choice is stored.
+    if (manualTheme.current) return;
+    applyTheme(systemPrefersDark());
+    setDark(systemPrefersDark());
+    let query: MediaQueryList | null = null;
+    const onChange = (event: MediaQueryListEvent) => {
+      if (manualTheme.current) return;
+      setDark(event.matches);
+    };
+    try {
+      query = window.matchMedia("(prefers-color-scheme: dark)");
+      if (typeof query.addEventListener === "function") query.addEventListener("change", onChange);
+      else query.addListener(onChange);
+    } catch {
+      query = null;
+    }
+    return () => {
+      if (!query) return;
+      try {
+        if (typeof query.removeEventListener === "function") query.removeEventListener("change", onChange);
+        else query.removeListener(onChange);
+      } catch { /* Ignore cleanup failures. */ }
+    };
+  }, []);
+  function chooseTheme(next: boolean) {
+    manualTheme.current = true;
+    setDark(next);
+    persistThemeChoice(next);
+    applyTheme(next);
+  }
   useEffect(() => {
     document.documentElement.lang = language;
     localStorage.setItem("dlens-language", JSON.stringify(language));
@@ -287,20 +366,36 @@ function WorkspaceApp() {
   }
   function sourceOption(file: Dataset) {
     const database = ["jazz", "api"].includes(file.format);
+    const isUrl = file.source?.kind === "url";
+    const isLocal = isLocalFileDataset(file);
     const deleteLabel = t(`Quelle „${file.name}“ löschen`, `Delete source “${file.name}”`);
+    const reloadUrl = file.source?.kind === "url" ? file.source.url : undefined;
+    const reloadLabel = (reloadUrl || isLocal) ? t(`Quelle „${file.name}“ erneut laden`, `Reload source “${file.name}”`) : "";
     return <div className="source-option" key={file.id}>
       <button className="source-select" onClick={() => {
         setResult(null); setSource(file.id); setColumns(file.scalarColumns);
         setFilters([]); setQuery(""); setPanel("");
       }}>
-        {database ? <CircleStackIcon /> : <DocumentChartBarIcon />}
-        <span className="source-name">{file.name}</span>
+        {database ? <CircleStackIcon /> : isUrl ? <CloudIcon /> : <DocumentChartBarIcon />}
+        <span className="source-name" title={reloadUrl ?? undefined}>{file.name}</span>
         {database && <small>SQLite · {t("lokale Kopie", "local copy")}</small>}
         {source === file.id && <CheckIcon />}
       </button>
-      <button className="source-delete icon-button" disabled={working} title={deleteLabel} aria-label={deleteLabel} onClick={() => void deleteImported("source", file)}>
-        <TrashIcon />
-      </button>
+      <div className="source-actions">
+        <button className="source-delete icon-button" disabled={working} title={deleteLabel} aria-label={deleteLabel} onClick={() => void deleteImported("source", file)}>
+          <TrashIcon />
+        </button>
+        {reloadUrl && (
+          <button className="source-reload icon-button" disabled={working} title={reloadLabel} aria-label={reloadLabel} onClick={() => void importFromUrl(reloadUrl)}>
+            <ArrowPathIcon />
+          </button>
+        )}
+        {!reloadUrl && isLocal && (
+          <button className="source-reload icon-button" disabled={working} title={reloadLabel} aria-label={reloadLabel} onClick={() => requestLocalReload(file)}>
+            <ArrowPathIcon />
+          </button>
+        )}
+      </div>
     </div>;
   }
   useEffect(() => {
@@ -379,31 +474,176 @@ function WorkspaceApp() {
     setQuery(view.query);
     setPanel("");
   }
+  async function refreshAfterReplacement() {
+    if (!storage.current) return [];
+    try {
+      const datasets = await storage.current.request<Dataset[]>({ type: "list" });
+      setFiles(datasets);
+      if (!datasets.some((item) => item.id === source)) {
+        setSource(""); setDetail(null); setResult(null); setResultContext(null);
+        setPages({}); setPathPage(0); setTimelinePage(0); setValuePage(0);
+      }
+      setRevision((value) => value + 1);
+      return datasets;
+    } catch {
+      return [];
+    }
+  }
   async function importFile(file: File | undefined) {
     if (!file || working) return;
     try {
       formatFor(file);
       if (!storage.current) throw new Error("Datenbank noch nicht bereit / Database not ready");
+      const identity = localIdentityFor(file, localPath);
+      const display = displayNameFor(identity);
+      const matches = findIdentityMatches(files, identity);
       setWorking(true); setProgress({ phase: "reading", bytes: 0, total: file.size, records: 0 });
-      const imported = await storage.current.request<Dataset | Dataset[]>({ type: "import", file, csv: csvOptions, language, replace: files.find((f) => f.name === file.name && f.format !== "jazz")?.id }, { progress: setProgress, confirm: confirmImport });
+      // Fully delete the previous datasets for this source before reloading.
+      for (const match of matches) {
+        await storage.current.request<Dataset[]>({ type: "delete", dataset: match.id });
+      }
+      if (matches.length) {
+        const remaining = await storage.current.request<Dataset[]>({ type: "list" }).catch(() => null);
+        if (remaining) setFiles(remaining);
+      }
+      const imported = await storage.current.request<Dataset | Dataset[]>({
+        type: "import", file, csv: csvOptions, language,
+        source: { kind: "local", path: identity.kind === "local" ? identity.path : "", filename: file.name, groupId: newLocalGroupId() },
+        displayName: display,
+      }, { progress: setProgress, confirm: confirmImport });
       const datasets = Array.isArray(imported) ? imported : [imported];
       const dataset = datasets[0];
       setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
       setTimeColumnsBySource((previous) => ({ ...previous, ...Object.fromEntries(datasets.map((data) => [data.id, data.mapping])) }));
-      setResult(null); setSource(dataset.id);
+      setResult(null); setResultContext(null); setSource(dataset.id);
       setTimeColumnsBySource((previous) => ({ ...previous, [dataset.id]: dataset.mapping }));
       setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setPanel("");
       setNotice(t("Datei lokal gespeichert", "File stored locally"));
-    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+      await refreshAfterReplacement();
+    }
     finally { setWorking(false); setProgress(null); }
   }
-  async function importRemote() {
-    if (!storage.current || working) return;
-    try { setWorking(true); setProgress(null);
-      const dataset = await storage.current.request<Dataset>({ type: "remote", url: remoteUrl, token: remoteToken, name: "API · " + new URL(remoteUrl).hostname }, { progress: setProgress, confirm: confirmImport });
-      setFiles((previous) => [...previous, dataset]); setResult(null); setSource(dataset.id); setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setSettings(false);
-      setNotice(t("Remote-Daten lokal gespeichert", "Remote data stored locally"));
-    } catch (error) { setNotice(String(error)); } finally { setRemoteToken(""); setWorking(false); setProgress(null); }
+  function requestLocalReload(file: Dataset) {
+    if (working) return;
+    // The browser keeps no durable file handle: capture only the target here
+    // and read a freshly selected file when the picker resolves.
+    pendingLocalReload.current = file.id;
+    localReloadInput.current?.click();
+  }
+  async function importLocalReloadFile(file: File | undefined) {
+    const targetId = pendingLocalReload.current;
+    pendingLocalReload.current = null;
+    if (!file || working) return;
+    try {
+      formatFor(file);
+      if (!storage.current) throw new Error("Datenbank noch nicht bereit / Database not ready");
+      const target = files.find((entry) => entry.id === targetId);
+      if (!target || !isLocalFileDataset(target)) throw new Error("Quelle nicht gefunden / Source not found.");
+      // Validate the fresh selection against the explicitly chosen source
+      // before deleting anything; a mismatch or dismissed picker keeps data.
+      validateLocalReloadSelection(target, file);
+      const targets = findLocalReloadTargets(files, target.id);
+      const previous = target.source?.kind === "local" ? target.source : undefined;
+      const genuine = genuineFilePath(file);
+      const groupId = previous?.groupId ?? newLocalGroupId();
+      const path = genuine || previous?.path || "";
+      setWorking(true); setProgress({ phase: "reading", bytes: 0, total: file.size, records: 0 });
+      // Fully delete the previous datasets of this source before reloading.
+      for (const match of targets) {
+        await storage.current.request<Dataset[]>({ type: "delete", dataset: match.id });
+      }
+      if (targets.length) {
+        const remaining = await storage.current.request<Dataset[]>({ type: "list" }).catch(() => null);
+        if (remaining) setFiles(remaining);
+      }
+      const imported = await storage.current.request<Dataset | Dataset[]>({
+        type: "import", file, csv: csvOptions, language,
+        source: { kind: "local", path, filename: file.name, groupId },
+        displayName: file.name,
+      }, { progress: setProgress, confirm: confirmImport });
+      const datasets = Array.isArray(imported) ? imported : [imported];
+      const dataset = datasets[0];
+      setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
+      setTimeColumnsBySource((previousTime) => ({ ...previousTime, ...Object.fromEntries(datasets.map((data) => [data.id, data.mapping])) }));
+      setResult(null); setResultContext(null); setSource(dataset.id);
+      setTimeColumnsBySource((previousTime) => ({ ...previousTime, [dataset.id]: dataset.mapping }));
+      setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setPanel("");
+      setNotice(t("Datei lokal gespeichert", "File stored locally"));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+      await refreshAfterReplacement();
+    }
+    finally { setWorking(false); setProgress(null); }
+  }
+  async function importFromUrl(explicitUrl?: string) {
+    const raw = (explicitUrl ?? urlInput).trim();
+    if (!storage.current || working || !raw) return;
+    try {
+      const identity = urlIdentityFor(raw);
+      setWorking(true); setProgress(null);
+      const matches = findIdentityMatches(files, identity);
+      for (const match of matches) {
+        await storage.current.request<Dataset[]>({ type: "delete", dataset: match.id });
+      }
+      if (matches.length) {
+        const remaining = await storage.current.request<Dataset[]>({ type: "list" }).catch(() => null);
+        if (remaining) setFiles(remaining);
+      }
+      const imported = await storage.current.request<Dataset | Dataset[]>({
+        type: "url-import", url: canonicalUrl(raw), csv: csvOptions, language,
+        source: { kind: "url", url: identity.kind === "url" ? identity.url : canonicalUrl(raw), filename: identity.filename },
+        displayName: displayNameFor(identity),
+      }, { progress: setProgress, confirm: confirmImport });
+      const datasets = Array.isArray(imported) ? imported : [imported];
+      setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
+      setTimeColumnsBySource((previous) => ({ ...previous, ...Object.fromEntries(datasets.map((data) => [data.id, data.mapping])) }));
+      setResult(null); setResultContext(null); setSource(datasets[0].id);
+      setColumns(datasets[0].scalarColumns); setFilters([]); setQuery(""); setPanel("");
+      if (explicitUrl === undefined) setUrlInput("");
+      setNotice(t("Datei lokal gespeichert", "File stored locally"));
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); await refreshAfterReplacement(); }
+    finally { setWorking(false); setProgress(null); }
+  }
+  async function loadConnectorSources(profileId: string, token: string) {
+    const profile = connectors.find((entry) => entry.id === profileId);
+    if (!profile || !storage.current) { setConnectorSources([]); return; }
+    if (profile.kind === "ndjson") { setConnectorSources([filenameFromUrl(profile.endpoint)]); return; }
+    discoveryController.current?.abort();
+    const controller = new AbortController();
+    discoveryController.current = controller;
+    setConnectorLoading(true);
+    try {
+      const discovered = await discoverConnectorSources(profile, token, controller.signal);
+      if (!controller.signal.aborted) setConnectorSources(discovered);
+    } catch (error) { if (!controller.signal.aborted) { setNotice(error instanceof Error ? error.message : String(error)); setConnectorSources([]); } }
+    finally { if (!controller.signal.aborted) setConnectorLoading(false); }
+  }
+  async function importConnectorPull() {
+    const profile = connectors.find((entry) => entry.id === connectorChoice);
+    if (!profile || !storage.current || working || !connectorSource) return;
+    try {
+      const identity = connectorIdentityFor(profile, connectorSource);
+      setWorking(true); setProgress(null);
+      const matches = findIdentityMatches(files, identity);
+      for (const match of matches) {
+        await storage.current.request<Dataset[]>({ type: "delete", dataset: match.id });
+      }
+      if (matches.length) {
+        const remaining = await storage.current.request<Dataset[]>({ type: "list" }).catch(() => null);
+        if (remaining) setFiles(remaining);
+      }
+      const dataset = await storage.current.request<Dataset>({
+        type: "connector-pull", profileId: profile.id, profileName: profile.name,
+        kind: profile.kind, endpoint: profile.endpoint, sourceName: connectorSource, token: connectorToken,
+      }, { progress: setProgress, confirm: confirmImport });
+      setFiles(await storage.current.request<Dataset[]>({ type: "list" }));
+      setResult(null); setResultContext(null); setSource(dataset.id);
+      setColumns(dataset.scalarColumns); setFilters([]); setQuery(""); setPanel("");
+      setNotice(t("Connector-Daten lokal gespeichert", "Connector data stored locally"));
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); await refreshAfterReplacement(); }
+    finally { setConnectorToken(""); setWorking(false); setProgress(null); }
   }
   function download() {
     if (selectedDataset && storage.current) {
@@ -505,11 +745,13 @@ function WorkspaceApp() {
             >
               {source === "jazz" || ["jazz", "api"].includes(selectedDataset?.format ?? "") ? (
                 <CircleStackIcon />
+              ) : selectedDataset?.source?.kind === "url" ? (
+                <CloudIcon />
               ) : (
                 <DocumentChartBarIcon />
               )}
               <span>
-                <strong>
+                <strong title={selectedDataset?.source?.kind === "url" ? selectedDataset.source.url : undefined}>
                   {sourceDragActive
                     ? t("Datei zum Importieren ablegen", "Drop file to import")
                     : source === "jazz"
@@ -557,21 +799,138 @@ function WorkspaceApp() {
               event.target.value = "";
             }}
           />
+          <input
+            ref={localReloadInput}
+            type="file"
+            className="local-reload-input"
+            disabled={!storageReady || working}
+            accept=".json,.yaml,.yml,.kyaml,.csv,.xml"
+            hidden
+            onChange={(event) => {
+              const selected = event.target.files?.[0];
+              event.target.value = "";
+              void importLocalReloadFile(selected);
+            }}
+          />
           {panel === "sources" && (
             <div className="inline-panel sources">
-              <div className="panel-label">{t("DATEIEN", "FILES")}</div>
+              <div className="source-heading"><span>{t("Daten importieren", "Import Data")}</span></div>
               {files.filter((file) => !["jazz", "api"].includes(file.format)).map(sourceOption)}
               <button onClick={() => fileInput.current?.click()}>
                 <PlusIcon />
-                {t("Datei importieren", "Import file")}
+                {t("Datei auswählen", "Select file")}
                 <small>JSON / YAML / KYAML / CSV / XML</small>
               </button>
-              <div className="panel-label">{t("DATENBANKEN / API", "DATABASES / API")}</div>
+              <label>
+                {t("Lokaler Quellpfad (optional)", "Local source path (optional)")}
+                <input
+                  value={localPath}
+                  onChange={(e) => setLocalPath(e.target.value)}
+                  placeholder={t("/pfad/zur/datei.json", "/path/to/file.json")}
+                />
+              </label>
+              <form
+                className="url-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void importFromUrl();
+                }}
+              >
+                <div className="source-heading">
+                  <span id="url-heading-label">Web Source</span>
+                  <button
+                    type="button"
+                    className="icon-button url-info"
+                    aria-expanded={urlHelpOpen}
+                    aria-controls="url-help"
+                    title={t("Hilfe zu Web-Quellen", "Web source help")}
+                    aria-label={t("Hilfe zu Web-Quellen", "Web source help")}
+                    onClick={() => setUrlHelpOpen((open) => !open)}
+                  >
+                    <InformationCircleIcon />
+                  </button>
+                </div>
+                {urlHelpOpen && (
+                  <div id="url-help">
+                    <p className="subtle">
+                      {t(
+                        "URLs müssen nicht auf eine Dateiendung enden; der vom Server geladene Dateiname bestimmt das Format. Unterstützt: JSON, YAML, YML, KYAML, CSV, XML.",
+                        "URLs need not end in a file extension; the server's downloaded filename determines the format. Supported: JSON, YAML, YML, KYAML, CSV, XML.",
+                      )}
+                    </p>
+                    <p className="subtle">
+                      {t(
+                        "Browser geben keinen absoluten Dateipfad preis. Ohne Pfadangabe wird jeder Import als neue Quelle angelegt; gleiche Dateinamen werden nicht zusammengeführt. Mit Pfad identifiziert der volle Pfad die Quelle für den vollständigen Ersatz beim Reimport. Das Nachladen-Symbol einer lokalen Quelle öffnet die Dateiauswahl neu: Die frisch gewählte Datei muss denselben Dateinamen tragen und ersetzt genau diese Quelle (einschließlich aller YAML-Teile); eine abweichende Auswahl oder ein abgebrochener Dialog lässt die Daten unverändert.",
+                        "Browsers do not expose absolute file paths. Without a path each import creates a new source; equal file names are never merged. With a path, the full path identifies the source for complete replacement on reimport. A local source's reload icon reopens file selection: the freshly chosen file must carry the same filename and replaces exactly that source (including all YAML parts); a mismatched selection or dismissed dialog leaves the data untouched.",
+                      )}
+                    </p>
+                  </div>
+                )}
+                <span className="url-field">
+                  <input
+                    type="url"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    placeholder="https://example.org/data.json"
+                    aria-label={t("Datei-URL", "File URL")}
+                  />
+                  <button
+                    type="submit"
+                    className="icon-button url-submit"
+                    disabled={!urlInput.trim() || working}
+                    title={t("URL importieren", "Import URL")}
+                    aria-label={t("URL importieren", "Import URL")}
+                  >
+                    <ArrowDownTrayIcon />
+                  </button>
+                </span>
+              </form>
+              <div className="source-heading"><span>{t("Datenbanken / API", "Databases / API")}</span></div>
               {files.filter((file) => ["jazz", "api"].includes(file.format)).map(sourceOption)}
-              <p>
-                MariaDB, PostgreSQL ·{" "}
-                {t("über Connector-Backend", "via connector backend")}
-              </p>
+              <label>
+                {t("Connector", "Connector")}
+                <span className="select-wrap">
+                  <select value={connectorChoice} onChange={(e) => { setConnectorChoice(e.target.value); setConnectorSource(""); setConnectorSources([]); setConnectorToken(""); }}>
+                    <option value="">{t("Bitte auswählen", "Please select")}</option>
+                    {connectors.map((entry) => (
+                      <option key={entry.id} value={entry.id}>{entry.name}</option>
+                    ))}
+                  </select>
+                  <ChevronDownIcon aria-hidden="true" />
+                </span>
+              </label>
+              {connectorChoice && (
+                <>
+                  <button
+                    disabled={connectorLoading}
+                    onClick={() => void loadConnectorSources(connectorChoice, connectorToken)}
+                  >
+                    {t("Verfügbare Quellen laden", "Load available sources")}
+                  </button>
+                  {!!connectorSources.length && (
+                    <label>
+                      {t("Quelle", "Source")}
+                      <span className="select-wrap">
+                        <select value={connectorSource} onChange={(e) => setConnectorSource(e.target.value)}>
+                          <option value="">{t("Bitte auswählen", "Please select")}</option>
+                          {connectorSources.map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                        </select>
+                        <ChevronDownIcon aria-hidden="true" />
+                      </span>
+                    </label>
+                  )}
+                  <label>
+                    {t("Zugriffstoken (nur für diesen Import)", "Access token (only for this import)")}
+                    <input type="password" autoComplete="off" value={connectorToken} onChange={(e) => setConnectorToken(e.target.value)} />
+                  </label>
+                  <button disabled={!connectorSource || working} onClick={() => void importConnectorPull()}>
+                    <PlusIcon />
+                    {t("Connector importieren", "Import connector")}
+                  </button>
+                </>
+              )}
             </div>
           )}
           {storageError && <p role="alert">{storageError}</p>}
@@ -634,7 +993,7 @@ function WorkspaceApp() {
                 dark ? "Hellmodus" : "Dunkelmodus",
                 dark ? "Light mode" : "Dark mode",
               )}
-              onClick={() => setDark(!dark)}
+              onClick={() => chooseTheme(!dark)}
             >
               {dark ? <SunIcon /> : <MoonIcon />}
             </IconButton>
@@ -657,7 +1016,7 @@ function WorkspaceApp() {
               }}
             >
               <label>
-                {t("Spalte", "Column")}
+                {t("Feld", "Field")}
                 <select
                   value={filterColumn}
                   disabled={filterPending}
@@ -716,7 +1075,7 @@ function WorkspaceApp() {
           )}
           {panel === "columns" && (
             <div className="inline-panel column-options">
-              <span>{t("Sichtbare Spalten", "Visible columns")}</span>
+              <span>{t("Sichtbare Felder", "Visible fields")}</span>
               {allColumns.map((column) => (
                 <label key={column}>
                   <input
@@ -743,8 +1102,8 @@ function WorkspaceApp() {
               {views.length === 0 && (
                 <p>
                   {t(
-                    "Speichere deine erste Ansicht – mit genau den Spalten, die du brauchst.",
-                    "Save your first view with just the columns you need.",
+                    "Speichere deine erste Ansicht – mit genau den Feldern, die du brauchst.",
+                    "Save your first view with just the fields you need.",
                   )}
                 </p>
               )}
@@ -1254,8 +1613,8 @@ function WorkspaceApp() {
                   ) : (
                     <p className="empty-columns">
                       {t(
-                        "Wähle unter Anzeige mindestens eine vorhandene Spalte.",
-                        "Select at least one available column under Display.",
+                        "Wähle unter Anzeige mindestens ein vorhandenes Feld.",
+                        "Select at least one available field under Display.",
                       )}
                     </p>
                   )}
@@ -1456,7 +1815,7 @@ function WorkspaceApp() {
               </label>
             ))}
             <p className="subtle">
-              {t("Zeitfelder werden anhand üblicher Spaltennamen vorausgewählt. Die Zuordnung gilt für die aktuelle Quelle.", "Time fields are preselected using common column names. The mapping applies to the current source.")}
+              {t("Zeitfelder werden anhand üblicher Feldnamen vorausgewählt. Die Zuordnung gilt für die aktuelle Quelle.", "Time fields are preselected using common field names. The mapping applies to the current source.")}
             </p>
             <label>
               {t("Einfärbung nach", "Color by")}
@@ -1504,25 +1863,98 @@ function WorkspaceApp() {
             <p className="subtle">{t("Gilt für CSV-Import und -Export. Automatisch verwendet beim Export Komma. Ohne Kopfzeile heißen importierte Spalten Column1, Column2 usw. Werte bleiben als Text erhalten.", "Applies to CSV import and export. Automatic uses commas for export. Without a header, imported columns are named Column1, Column2, etc. Values remain text.")}</p>
             <button type="button" onClick={() => setCsvOptions({ ...defaultCsvOptions })}>{t("CSV-Defaults wiederherstellen", "Restore CSV defaults")}</button>
             <div className="settings-divider" />
-            <h3><CircleStackIcon />{t("API / Datenbank-Connector", "API / database connector")}</h3>
-            <p>{t("NDJSON-Endpunkt importieren. Datenbank-Zugangsdaten gehören ausschließlich ins separate Connector-Backend.", "Import an NDJSON endpoint. Database credentials belong only in the separate connector backend.")}</p>
-            <label>URL<input type="url" value={remoteUrl} onChange={(e) => setRemoteUrl(e.target.value)} placeholder="https://example.org/records?table=events" /></label>
-            <label>{t("Zugriffstoken (nur für diesen Import)", "Access token (only for this import)")}<input type="password" autoComplete="off" value={remoteToken} onChange={(e) => setRemoteToken(e.target.value)} /></label>
-            <button disabled={!remoteUrl || working} onClick={() => void importRemote()}>{t("Remote-Quelle importieren", "Import remote source")}</button>
+            <h3><CircleStackIcon />{t("Datenbanken", "Databases")}</h3>
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => {
+                const profile: ConnectorProfile = { id: newProfileId(), name: t("Neue Datenbank", "New database"), kind: "postgres", endpoint: "" };
+                setConnectors((previous) => [...previous, profile]);
+                setExpandedConnector(profile.id);
+              }}
+            >
+              <PlusIcon />
+              {t("Datenbank hinzufügen +", "Add database +")}
+            </button>
+            {connectors.map((profile) => {
+              const expanded = expandedConnector === profile.id;
+              return (
+                <div key={profile.id}>
+                  <div className="source-option">
+                    <CircleStackIcon aria-hidden="true" />
+                    <span className="source-name">{profile.name}</span>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t(`Verbindung „${profile.name}“ löschen`, `Delete connection “${profile.name}”`)}
+                      aria-label={t(`Verbindung „${profile.name}“ löschen`, `Delete connection “${profile.name}”`)}
+                      disabled={working}
+                      onClick={() => {
+                        if (!window.confirm(t(`Verbindung „${profile.name}“ löschen?`, `Delete connection “${profile.name}”?`))) return;
+                        setConnectors((previous) => previous.filter((entry) => entry.id !== profile.id));
+                        if (expandedConnector === profile.id) setExpandedConnector(null);
+                        if (connectorChoice === profile.id) { setConnectorChoice(""); setConnectorSource(""); setConnectorSources([]); }
+                      }}
+                    >
+                      <TrashIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button source-chevron"
+                      title={expanded ? t("Einstellungen einklappen", "Collapse settings") : t("Einstellungen bearbeiten", "Edit settings")}
+                      aria-label={expanded ? t("Einstellungen einklappen", "Collapse settings") : t("Einstellungen bearbeiten", "Edit settings")}
+                      aria-expanded={expanded}
+                      onClick={() => setExpandedConnector(expanded ? null : profile.id)}
+                    >
+                      <ChevronDownIcon className={expanded ? "" : "rotated"} />
+                    </button>
+                  </div>
+                  {expanded && (
+                    <div className="inline-panel">
+                      <label>
+                        {t("Name", "Name")}
+                        <input
+                          value={profile.name}
+                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, name: e.target.value } : entry))}
+                        />
+                      </label>
+                      <label>
+                        {t("Typ", "Type")}
+                        <select
+                          value={profile.kind}
+                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, kind: e.target.value as ConnectorProfile["kind"] } : entry))}
+                        >
+                          <option value="postgres">PostgreSQL</option>
+                          <option value="mariadb">MariaDB</option>
+                          <option value="ndjson">NDJSON</option>
+                        </select>
+                      </label>
+                      <label>
+                        {profile.kind === "ndjson" ? "URL" : t("Connector-URL", "Connector URL")}
+                        <input
+                          type="url"
+                          value={profile.endpoint}
+                          onChange={(e) => setConnectors((previous) => previous.map((entry) => entry.id === profile.id ? { ...entry, endpoint: e.target.value } : entry))}
+                          placeholder={profile.kind === "ndjson" ? "https://example.org/records" : "http://127.0.0.1:8787"}
+                        />
+                      </label>
+                      <p className="subtle">
+                        {profile.kind === "ndjson"
+                          ? t("Tokens werden nicht gespeichert und gelten nur für den laufenden Import.", "Tokens are not stored and apply only to the running import.")
+                          : t("Zugangsdaten liegen ausschließlich im Connector-Backend. Gespeichert werden nur Name, Typ und URL.", "Credentials stay in the connector backend. Only name, type and URL are stored.")}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             <div className="settings-divider" />
-            <h3><CircleStackIcon />SQLite · OPFS</h3>
+            <h3><CircleStackIcon />{t("Lokaler Datenspeicher", "Local data storage")}</h3>
             {storageStats && <p>{t("Datenbank", "Database")}: {(storageStats.databaseBytes / 2 ** 20).toFixed(1)} MiB · {t("Geschätzter freier Browserspeicher", "Estimated available browser storage")}: {storageStats.quota ? ((storageStats.quota - (storageStats.usage ?? 0)) / 2 ** 30).toFixed(1) + " GiB" : "—"} · {storageStats.persisted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Speicherung unterliegt Browserbereinigung", "Storage subject to browser eviction")}</p>}
             <p>{t("Importierte Dateien bleiben lokal in diesem Browser gespeichert. Die Originaldatei wird nicht zusätzlich kopiert.", "Imported files persist locally in this browser. Original files are not duplicated.")}</p>
             <button onClick={() => { void navigator.storage?.persist().then((granted) => setNotice(granted ? t("Dauerhafter Speicher gewährt", "Persistent storage granted") : t("Browser hat dauerhaften Speicher nicht gewährt", "Browser did not grant persistent storage"))); }}>{t("Dauerhaften Browserspeicher anfragen", "Request persistent browser storage")}</button>
             {selectedDataset && <button disabled={working} onClick={() => void deleteImported("source")}>{t("Ausgewählte Quelle löschen", "Delete selected source")}</button>}
             <button disabled={working} onClick={() => void deleteImported("all")}>{t("Alle importierten Daten löschen", "Delete all imported data")}</button>
-            <p className="subtle">
-              MariaDB · PostgreSQL —{" "}
-              {t(
-                "über separates Connector-Backend verfügbar",
-                "available via separate connector backend",
-              )}
-            </p>
             </section>
             <Dialog.Close className="done-button">
               {t("Fertig", "Done")}

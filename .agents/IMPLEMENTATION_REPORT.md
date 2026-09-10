@@ -4,28 +4,36 @@ SUCCESS
 
 # Implemented
 
-- Task 1: no changes needed; prior run's `src/lib/pwa.ts` (deferred ref, `detectInstalled` in `isStandalone`, `onRegisteredSW` readiness, working guards, error codes) and `src/components/PwaSettings.tsx` (deferred-update copy, DE/EN offline text, localized errors) already satisfy the plan.
-- Task 2: fixed remaining `scripts/check-pwa-browser.mjs` checks — enabled-submit wait (`button.primary:not(:disabled)`), `button.chip` reset target, exact-row wait for offline import, banner wait after waiting worker, mobile dialog reopen guard.
-- Task 3: docs (`docs/pwa.md`, README PWA section) already match actual behavior; screenshots regenerated and inspected.
+- Local file reload: same ArrowPathIcon reload after trash for genuine local file datasets (incl. legacy), excluded for URL/connector/API/jazz.
+- Dedicated hidden picker with independent pending target, cancel clearing, same-file reselection, pre-delete filename/genuine-path validation.
+- Durable local source groupId on new imports (all YAML parts), preserved across reload; path identity where known; legacy unknown-path targets resolve to the selected row only; path-based reimport policy unchanged.
+- In-app help paragraph and README (sources + YAML sections) explain fresh-selection local reload.
+- Browser smoke adapted (actions-edge assertion, URL-row-scoped reload click) and extended with local reload fixture incl. restart and mismatch cases.
 
 # Changed Files
 
-- `scripts/check-pwa-browser.mjs` (untracked baseline file; 4 focused check fixes, no production changes)
+- src/components/App.tsx
+- src/lib/source-identity.ts
+- src/lib/source-identity.test.ts
+- src/lib/ingestion/contracts.ts
+- src/lib/ingestion/service.ts
+- src/lib/ingestion/replacement.test.ts
+- scripts/check-storage-browser.mjs
+- README.md
 
 # Verification
 
-- `npm test -- src/lib/pwa.test.ts`: passed (1/1).
-- `npm run build`: passed (PWA GenerateSW, 18 precache entries).
-- `npm run test:pwa`: PASS (offline reload/filter/import, update defer/guard/explicit reload, install flow, DE/EN + desktop/mobile, no API/fixture caching).
-- `npm test`: 62 passed / 2 failed — exact accepted baseline: `festival.test.ts` ENOENT `public/demo/weitklang-festival-2027.json`, two `pipeline.test.ts` 5s-timeout tests.
-- `git diff --check`: passed.
-- Self-review against baseline and acceptance criteria: passed (user baseline preserved, no stash/reset; screenshots confirm dialog open with correct DE copy and preserved rows).
+- npx vitest run src/lib/source-identity.test.ts src/lib/ingestion/replacement.test.ts: passed (21 tests).
+- npx vitest run: passed (18 files, 159 tests).
+- npx astro check: passed (0 errors).
+- npm run build: passed.
+- DLENS_TEST_URL=http://127.0.0.1:4347 node scripts/check-storage-browser.mjs (own preview on port 4347 with DLENS_RELAY_ALLOW_LOOPBACK=1, isolated profile): passed, incl. local reload order/replace/restart/mismatch and URL reload.
+- git diff --check: passed.
+- Self-review against baseline and acceptance criteria: passed.
 
 # Plan Deviations
 
-- Offline-import check waits for exact `tbody` row (`pwa-off`, 1 row) instead of body-substring wait, which passed early via the `pwa-offline.json` source name before rows rendered.
-- Banner assertion waits up to 30s for `.pwa-update-banner` after waiting worker (race between SW state and React render).
-- Mobile screenshot reopens settings (waits for settings button first) if the `isMobile` viewport emulation reload drops dialog state.
+- none
 
 # Blockers
 

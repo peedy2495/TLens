@@ -10,7 +10,7 @@ import {
 
 const data = JSON.parse(
   readFileSync(
-    new URL("../../public/demo/weitklang-festival-2027.json", import.meta.url),
+    new URL("../../demo/weitklang-festival-2027.json", import.meta.url),
     "utf8",
   ),
 );

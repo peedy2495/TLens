@@ -80,7 +80,7 @@ export class StorageClient {
           new Promise<T>((resolve, reject) => {
             if (
               operationVersion !== this.operationVersion &&
-              ["import", "jazz", "export", "remote"].includes(request.type)
+              ["import", "url-import", "connector-pull", "jazz", "export", "remote"].includes(request.type)
             ) {
               reject(new Error("Abgebrochen / Cancelled"));
               return;

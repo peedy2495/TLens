@@ -55,6 +55,17 @@ export interface Progress {
 export interface Dataset {
   sourceFile?: string;
   part?: number;
+  source?: {
+    kind: "local" | "url" | "connector";
+    path?: string;
+    filename?: string;
+    url?: string;
+    connectorId?: string;
+    connectorName?: string;
+    sourceName?: string;
+    /** Stable group shared by all datasets of one local file import (all YAML parts). */
+    groupId?: string;
+  };
   id: string;
   name: string;
   format: string;
@@ -119,8 +130,10 @@ export interface ChildPage {
 }
 export type Request =
   | { type: "list" }
-  | { type: "import"; file: File; csv: CsvOptions; replace?: string; language?: "de" | "en" }
-  | { type: "remote"; url: string; token: string; name: string }
+  | { type: "import"; file: File; csv: CsvOptions; replace?: string; language?: "de" | "en"; source?: Dataset["source"]; displayName?: string }
+  | { type: "url-import"; url: string; csv: CsvOptions; language?: "de" | "en"; source?: Dataset["source"]; displayName?: string }
+  | { type: "remote"; url: string; token: string; name: string; replace?: string; source?: Dataset["source"] }
+  | { type: "connector-pull"; profileId: string; profileName: string; kind: string; endpoint: string; sourceName: string; token: string }
   | { type: "jazz"; data: string; account: string; name: string }
   | {
       type: "children";

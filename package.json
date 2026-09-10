@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev --host 0.0.0.0",
     "build": "astro check && astro build",
-    "preview": "astro preview --host 0.0.0.0",
+    "preview": "node scripts/preview.mjs",
     "test": "vitest run",
     "test:browser": "node scripts/check-storage-browser.mjs",
     "test:pwa": "node scripts/check-pwa-browser.mjs",

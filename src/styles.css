@@ -1327,8 +1327,116 @@ footer > span {
   font-size: 10px;
 }
 .source-select > svg:last-child:not(:first-child) { margin-left: auto; }
-.source-option .source-delete { flex: 0 0 auto; margin-left: auto; }
+.source-option .source-delete { flex: 0 0 auto; }
+.source-option .source-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.source-option .source-reload:hover:not(:disabled) { color: var(--accent); }
+/* Native selects keep keyboard semantics; the decorative chevron mirrors the
+   Select Datasource chevron (.source-button > svg:last-child). */
+.select-wrap {
+  position: relative;
+  display: flex;
+}
+.select-wrap select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+}
+.select-wrap > svg {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  color: var(--muted);
+  pointer-events: none;
+}
+/* URL import: Enter submits the form; the download button sits inside the
+   input's right edge and shares the existing icon-button style. The Web
+   Source heading keeps the info button immediately right of the label. */
+.url-form {
+  margin-bottom: 5px;
+}
+.source-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.source-heading > span {
+  font-size: 12px;
+  font-weight: 600;
+}
+.url-form .url-info {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.url-form .url-info:hover {
+  background: var(--soft);
+  color: var(--text);
+}
+.url-form .url-info svg {
+  width: 18px;
+  height: 18px;
+}
+.url-field {
+  position: relative;
+  display: flex;
+}
+.url-field input {
+  width: 100%;
+  padding-right: 48px;
+}
+.url-field .url-submit {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.url-field .url-submit:hover:not(:disabled) {
+  background: var(--soft);
+  color: var(--text);
+}
+.url-field .url-submit svg {
+  width: 20px;
+  height: 20px;
+}
+.settings-group .source-option .source-chevron svg {
+  width: 15px;
+  color: var(--muted);
+}
 .source-delete:hover:not(:disabled) { color: #ef4444; }
+.settings-group .source-option > svg:first-child {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.settings-group .source-option .icon-button {
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+}
+.settings-group .source-option + .inline-panel {
+  margin-top: 4px;
+  margin-bottom: 12px;
+}
 .pwa-update-banner {
   display: flex;
   align-items: center;
