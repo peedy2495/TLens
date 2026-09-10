@@ -1329,3 +1329,19 @@ footer > span {
 .source-select > svg:last-child:not(:first-child) { margin-left: auto; }
 .source-option .source-delete { flex: 0 0 auto; margin-left: auto; }
 .source-delete:hover:not(:disabled) { color: #ef4444; }
+.pwa-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 17px;
+  font-size: 12px;
+}
+.pwa-update-banner > span { flex: 1; min-width: 180px; }
+.pwa-update-banner button { font-size: 12px; }
+.pwa-settings h4 { margin: 16px 0 8px; font-size: 12px; }
+.pwa-settings p { margin: 0 0 8px; }

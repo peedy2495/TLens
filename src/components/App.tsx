@@ -57,6 +57,8 @@ import {
 } from "../lib/data";
 import { StoredRecordTree } from "./StoredRecordTree";
 import { RecordTree } from "./RecordTree";
+import { PwaSettings } from "./PwaSettings";
+import { usePwa } from "../lib/pwa";
 import { DLensAccount } from "../lib/jazz";
 import { StorageClient } from "../lib/storage/client";
 import { downloadStorage } from "../lib/storage/download";
@@ -176,6 +178,8 @@ function WorkspaceApp() {
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [now, setNow] = useState(new Date());
+  const pwa = usePwa(working);
+  const showPwaUpdate = pwa.updateAvailable && !pwa.updateDeferred;
   const fileInput = useRef<HTMLInputElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -857,6 +861,33 @@ function WorkspaceApp() {
             {selectedDataset ? result?.total ?? 0 : rows.length} {t("von", "of")} {count} {t("Einträgen", "entries")}
           </span>
         </div>
+        {showPwaUpdate && (
+          <div className="pwa-update-banner" role="status">
+            <span>
+              {t(
+                "Eine neue DLens-Version ist bereit.",
+                "A new DLens version is ready.",
+              )}
+            </span>
+            <button
+              className="primary"
+              disabled={working}
+              onClick={() => void pwa.applyUpdate()}
+              title={
+                working
+                  ? t(
+                      "Während Import/Löschen deaktiviert",
+                      "Disabled during import/deletion",
+                    )
+                  : undefined
+              }
+            >
+              <ArrowPathIcon />
+              {t("Aktualisieren", "Update")}
+            </button>
+            <button onClick={pwa.deferUpdate}>{t("Später", "Later")}</button>
+          </div>
+        )}
         {showTimeline && <section className="timeline-card">
           <div className="section-heading">
             <div>
@@ -1393,6 +1424,7 @@ function WorkspaceApp() {
                 <option value="en">English</option>
               </select>
             </label>
+            <PwaSettings language={language} working={working} pwa={pwa} />
             </section>
             <section className="settings-group" aria-labelledby="settings-display">
             <h3 id="settings-display">{t("Anzeige", "Display")}</h3>

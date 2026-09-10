@@ -61,47 +61,56 @@ Bei künftigen Änderungen werden README.md (Bedienung und Implementierungsstand
 
 ### Agentischer Entwicklungsworkflow
 
-Root `AGENTS.md` verweist kurz auf die zentralen Regeln in `.agents/AGENTS.md`.
-Für nicht-triviale Aufgaben analysiert und plant Codex/Astra, schreibt ein kompaktes
-`PLAN.md` mit Arbeitspaketen, Dateien, Prüfungen und Akzeptanzkriterien und verwendet
-danach den [OpenCode-Executor-Skill](.agents/skills/opencode-executor/SKILL.md).
-OpenCode/Muse implementiert und behebt normale Test-/Compiler-/Typfehler selbst.
-Codex prüft anschließend Diff, betroffene Dateien, Testergebnisse und Akzeptanz.
-Architekturblocker gehen zurück an Codex zur Neuplanung. Triviale lokale Änderungen
-und reine Dokumentation dürfen direkt erledigt werden. Bestehende Skills bleiben erhalten.
+Root `AGENTS.md` verweist auf die zentralen Regeln in `.agents/AGENTS.md`.
+Codex/Astra untersucht vor nicht-trivialen Aufgaben die relevanten Module, Patterns,
+Tests, APIs und Typen und schreibt einen detaillierten [`.agents/PLAN.md`](.agents/PLAN.md).
+Der Plan legt konkrete Dateien, Funktionen, Schnittstellen, Daten- und Kontrollflüsse,
+Zustände, Fehler, Persistenz, verbotene Alternativen, Tests und Akzeptanzkriterien fest.
+Eindeutigkeit und korrekte Architektur haben Vorrang vor kurzen Planungsprompts.
 
-Die [Planvorlage](.agents/skills/opencode-executor/references/plan-template.md)
-wird bei einer konkreten Aufgabe als `PLAN.md` ausgefüllt; die Einrichtung erzeugt
-bewusst keinen ausführbaren Produktplan. Start nach abgeschlossener Planung:
+OpenCode/Muse Spark 1.3 Contributor implementiert diesen verbindlichen Plan,
+behebt normale Compiler-/Typ-/Testfehler, führt die Prüfungen und einen vollständigen
+Self-Review durch. Danach schreibt es den kompakten `.agents/IMPLEMENTATION_REPORT.md`:
+
+- `SUCCESS`: alles umgesetzt und geprüft, keine offenen Blocker. Codex liest nur
+  Status, Abweichungen und Blocker und meldet den Abschluss; kein automatischer
+  zweiter Diff-Review, erneutes Lesen der Dateien oder Wiederholen der Tests.
+- `PARTIAL`: Codex entscheidet anhand des Reports über gezielte Nacharbeit oder Neuplanung.
+- `BLOCKED`: Codex untersucht nur den konkreten Blocker, ergänzt den Plan und delegiert erneut.
+
+Fehlende Architekturentscheidungen darf Muse nicht selbst ersetzen. Ungeplante
+Abstraktionen, API-Änderungen und angrenzende Refactorings sind nicht erlaubt.
+Triviale Änderungen, Dokumentation und Workflow-Pflege erledigt Codex direkt.
+Bestehende Änderungen bleiben erhalten; keine automatischen Stashes/Resets.
+
+Vorlagen: [detaillierter Plan](.agents/skills/opencode-executor/references/plan-template.md)
+und [kurzer Report](.agents/skills/opencode-executor/references/implementation-report-template.md).
+Der [Executor-Skill](.agents/skills/opencode-executor/SKILL.md) beschreibt die Übergabe.
+Root `PLAN.md` ist nur ein Verweis und wird nicht ausgeführt. Start nach abgeschlossener Planung:
 
 ```bash
 bash .agents/skills/opencode-executor/scripts/execute-plan.sh
 ```
 
-Das Script wechselt selbst ins Repository; ein absoluter Scriptpfad funktioniert
-auch aus anderen Arbeitsverzeichnissen. Es verwendet fest
-`opencode/muse-spark-1.3-contributor-free`, den Agenten `build` und standardmäßig
-`--variant medium`. Die vollständige Invocation im Script lautet:
+Das Script wechselt selbst ins Repository und funktioniert auch mit absolutem Pfad
+von einem anderen Arbeitsverzeichnis. Es verwendet fest
+`opencode/muse-spark-1.3-contributor-free`, Agent `build`, standardmäßig `--variant medium`:
 
 ```bash
 opencode run --agent build --model "$model" --variant "$effort" "$prompt" </dev/null
 ```
 
-`model` ist die oben festgelegte ID, `effort` standardmäßig `medium`, und `prompt`
-der kompakte Implementierungsauftrag im Script. Dateiinhalte werden nicht als
-Argumente kopiert. `--effort minimal|low|medium|high` überschreibt den Standard
-entsprechend der zentralen Routing-Regeln. `--effort xhigh --allow-xhigh` ist nur
-nach ausdrücklicher Nutzeranweisung zulässig. Kein automatischer Modellwechsel,
-keine automatischen Wiederholungen, keine pauschale Freigabe mit `--auto`.
+Der kompakte Executor-Prompt verweist auf die Dateien, statt ihren Inhalt zu kopieren.
+`--effort minimal|low|medium|high` folgt den zentralen Routing-Regeln; Abweichungen
+von medium stehen im Plan. `--effort xhigh --allow-xhigh` erfordert eine ausdrückliche
+Nutzeranweisung. Kein automatischer Modellwechsel, Retry oder pauschales Auto-Approval.
 
-Lokale Einrichtung am 09.09.2026 geprüft: OpenCode **1.18.30**, `run` ohne
-`--interactive`, Modellwahl über `--model`, Effort über `--variant`, Prompt als
-Positionsargument. `opencode models opencode --verbose` führt die Contributor-ID
-unter dem Anzeigenamen **Muse Spark 1.3 Free**; ihre Variante `medium` setzt
-`reasoningEffort: medium`. Der Agent `build` ist lokal vorhanden. Die Modell-ID
-wird bei normalen Läufen nicht erneut ermittelt.
+Vor jedem echten Lauf ersetzt das Script den alten Report durch einen ausstehenden
+`BLOCKED`-Report. So kann ein alter Erfolg nicht einen abgebrochenen Lauf verdecken.
+Ein neuer Report muss alle sieben Abschnitte enthalten. Ein `SUCCESS` mit gemeldeten
+Abweichungen oder Blockern geht zur gezielten Einordnung an Codex zurück.
 
-Sichere Setup-Checks ohne Modellaufruf:
+Sichere Setup-Prüfungen ohne Modellaufruf:
 
 ```bash
 bash -n .agents/skills/opencode-executor/scripts/execute-plan.sh
@@ -109,21 +118,21 @@ bash .agents/skills/opencode-executor/scripts/test-executor.sh
 bash .agents/skills/opencode-executor/scripts/execute-plan.sh --check
 ```
 
-`--check` verlangt ein existierendes, nicht leeres `PLAN.md`; ohne Plan endet es
-erwartungsgemäß mit Code 66. Der isolierte Test verwendet ausschließlich eine
-CLI-Attrappe und prüft Pfade mit Leerzeichen, fremdes Arbeitsverzeichnis,
-Fehlerfälle, feste Modellwahl und Effort-Übergabe. Codes: 64 für ungültige Argumente,
-66 für fehlende Dateien/falsches Repository, 69 für fehlende CLI; OpenCode-Fehlercodes
-werden unverändert weitergegeben. Auch bei Exit 0 muss Codex den Abschlussbericht
-auf Blocker und die Änderungen auf Erfüllung des Plans prüfen.
+`--check` verlangt ein lesbares, nicht leeres `.agents/PLAN.md`, prüft lokale
+Voraussetzungen und verändert den Report nicht. Der isolierte Test nutzt nur eine
+CLI-Attrappe und prüft Pfade mit Leerzeichen, fremdes Arbeitsverzeichnis, feste
+Modellwahl/Effort, Report-Status, veraltete/fehlende Reports und Fehlerweitergabe.
+CLI-Fehlercodes werden unverändert weitergereicht. Nach CLI-Exit 0 gilt:
+0 = sauberer SUCCESS, 2 = PARTIAL oder SUCCESS mit Abweichungen/Blockern,
+3 = BLOCKED, 65 = fehlender/ungültiger Report. Vorprüfungen: 64 = Argumente,
+66 = Dateien/Repository, 69 = CLI/Tool fehlt. Exit 0 ersetzt nicht das Lesen des Reports.
 
-Es wurde **kein echter Implementierungslauf** gestartet. Anmeldung, Live-Modellzugriff
-und die Bearbeitung konkreter Tool-Berechtigungen sind damit nicht getestet;
-der Executor erweitert vorhandene Berechtigungen nicht. OpenCode benötigt Zugriff
-auf seine lokalen Log-/Konfigurationsverzeichnisse, gegebenenfalls eine Freigabe
-der ausführenden Umgebung. Die vorherige Regel gegen eine Root-`AGENTS.md` wurde
-gezielt auf einen kurzen Einstiegspunkt geändert; zentrale Produktregeln bleiben
-unter `.agents`. Es wurden keine Produktabhängigkeiten hinzugefügt.
+Die CLI-Schnittstelle wurde lokal mit OpenCode 1.18.30 eingerichtet: `run`,
+`--model`, `--variant`, Positionsprompt und Agent `build`. Die Contributor-ID trägt
+lokal den Anzeigenamen „Muse Spark 1.3 Free“. Normale Läufe wiederholen die
+Modellsuche nicht. Setup-Tests beweisen weder Anmeldung noch Live-Verfügbarkeit;
+der Executor erweitert keine Berechtigungen. Die Einsparung entsteht vor allem
+nach der gründlichen Planung durch klare Umsetzung und den entfallenden Zweitreview.
 
 Die App startet ohne ausgewählte Datenquelle und ohne automatisch geladene Demo-Daten. Neue Dateiimporte bleiben jetzt über Sitzungen hinweg in SQLite verfügbar; diese Änderung ersetzt die frühere Sitzungsaufbewahrung. Ein erneuter Import desselben Dateinamens aktiviert den neuen Stand erst nach vollständigem Erfolg. Fehler oder Abbruch erhalten den bisherigen Stand. Originaldateien werden nicht zusätzlich kopiert. Ein ausgewählter SQLite-Datensatz lässt sich in den Einstellungen löschen.
 
@@ -166,7 +175,11 @@ Die JSON-Datei über den regulären Dateiimport oder Drag & Drop laden. Eine eig
 
 Astro 5 (Vite), React 19, TanStack Router, Tailwind CSS 4, Base UI Dialog und Heroicons Outline. Die Oberfläche verwendet eigene abgerundete Komponenten im Stil des Mockups; ein vollständiges shadcn/base-lyra-Komponentenset ist nicht installiert. Die Jazz-Integration folgt der lokalen Alkalye-Referenz und verwendet die korrigierte Version 0.20.19. Keine externen Schrift- oder Bilddienste.
 
-Für Vercel das GitHub-Repository importieren: Framework `Astro`, Build `npm run build`, Ausgabeverzeichnis `dist`. `vercel.json` enthält diese Einstellungen. Keine Umgebungsvariablen nötig. Ein Deployment wurde nicht durchgeführt.
+Für Vercel das GitHub-Repository importieren: Framework `Astro`, Build `npm run build`, Ausgabeverzeichnis `dist`. `vercel.json` enthält diese Einstellungen plus No-Cache-Header für `/sw.js`, `/manifest.webmanifest` und `/`. Keine Umgebungsvariablen nötig. Ein Deployment wurde nicht durchgeführt. Statisches Deployment; Details unter [PWA](docs/pwa.md).
+
+## PWA (Installierbar, offlinefähig)
+
+DLens ist als Progressive Web App installierbar. Der Produktionsbuild erzeugt Manifest und Service Worker (Workbox GenerateSW) und cacht ausschließlich App-Shell, `_astro`-JS/CSS/WASM/Fonts, Favicon und Icons. Installation und Update-Verhalten stehen in Einstellungen → Allgemein; Updates erfordern eine explizite Bestätigung und sind während Import/Löschen gesperrt. Offline funktionieren lokale Imports, Suche und Filter nach einmaligem Online-Laden; Remote-Quellen brauchen Netz. Voraussetzung: Browser mit Service Worker/OPFS über HTTPS oder localhost. Prüfung: `npm run test:pwa`. Details unter [docs/pwa.md](docs/pwa.md).
 
 ## Prüfstand
 

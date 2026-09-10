@@ -9,6 +9,7 @@
     "preview": "astro preview --host 0.0.0.0",
     "test": "vitest run",
     "test:browser": "node scripts/check-storage-browser.mjs",
+    "test:pwa": "node scripts/check-pwa-browser.mjs",
     "test:large": "node scripts/benchmark-storage.mjs",
     "connector": "node server/connector.mjs"
   },

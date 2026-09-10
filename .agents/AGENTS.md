@@ -98,7 +98,16 @@ Group settings into these sections:
 - Legacy Jazz integration; reference: https://github.com/carlassmann/alkalye, using Jazz for local-first sync and encryption.
 - Retain the shadcn/ui (base-lyra style) design target. Current implementation uses custom rounded components and Base UI Dialog; a full shadcn/base-lyra component set is not installed.
 - The legacy Jazz account remains anonymous and local without network sync. Existing data persists unchanged; authentication and cross-device sync remain future work. New accounts start empty. SQLite import activation and migration fingerprints must commit atomically; failures, cancellation and crash recovery must preserve the previous active generation.
-- Host the demo on Vercel via GitHub import: Astro, build `npm run build`, output `dist`. Deployment configuration is present; do not describe deployment as completed unless verified.
+- Host the demo on Vercel via GitHub import: Astro, build `npm run build`, output `dist`. Deployment configuration is present; do not describe deployment as completed unless verified. `vercel.json` sends no-cache headers for `/sw.js`, `/manifest.webmanifest` and `/`.
+
+## Progressive Web App
+
+- DLens is an installable, offline-capable PWA from the static production build: generated manifest plus Workbox GenerateSW precache. No storage, schema or ingestion changes for PWA.
+- Precache only `/` (`index.html`), `_astro/**/*.{js,css,wasm,woff,woff2}`, `favicon.svg` and `icons/*.png`, with a 5 MiB per-file ceiling. No runtime caching; never cache demos, user files, credentials or HTTP/API responses. Every emitted worker and WASM dependency must be precached for offline cold starts.
+- Manifest: id/start_url/scope `/`, `standalone`, orientation `any`, DLens/Data Explorer description, theme `#f97316`, background `#f6f8fa`. Single generated manifest and link. Navigation fallback serves `/` only for the root path with optional query, never for API/arbitrary paths. Service worker in production only; dev disabled.
+- Registration uses `registerType: "prompt"` with no forced skipWaiting/clientsClaim/auto reload. The React hook (`src/lib/pwa.ts`) stays mounted, captures `beforeinstallprompt` on mount, invokes it only from the settings click, consumes it after use and clears on `appinstalled`. Standalone detection covers `navigator.standalone` and display-mode changes; listeners are cleaned up. Show install action when a prompt exists, otherwise qualified browser-menu/Share guidance; show installed state when standalone. No unsolicited install popups.
+- Offline readiness reflects successful caching (`onOfflineReady`), not `navigator.onLine`. The workspace shows a nonmodal DE/EN update notice with Update and Later; Later defers while settings keep the update available. Updates are disabled and guarded while working (import/delete/migration); the existing Web Lock ownership stays intact and errors never break ordinary use. DE/EN, light/dark, desktop/mobile styles reuse existing components and Heroicons.
+- Regression: `npm run test:pwa` (`scripts/check-pwa-browser.mjs`) uses isolated Chrome profile and loopback `dist` server; artifacts only under `artifacts/pwa-check`. Document installation, first online load, offline local use, remote network need, explicit update, HTTPS/localhost and the one-window OPFS constraint in `docs/pwa.md`. Do not promise cross-device sync or shared storage.
 
 ## Festival demo data
 
@@ -122,60 +131,85 @@ Group settings into these sections:
 - Hide the legacy Jazz source selector entry, Jazz settings and migration action until sharing is implemented. Preserve Jazz storage and internal migration support; existing SQLite copies remain accessible. This overrides earlier requirements to expose Jazz configuration or migration in settings.
 - Do not show a Prototype badge or a fake user/avatar in the header.
 
-## Planning, delegated execution and review
+## Planning, delegated execution and reporting
 
 ### Roles and scope
 
-- **Codex / Astra** owns problem and repository analysis, architecture decisions,
-  relevant-file discovery, dependencies, risks, `PLAN.md`, concrete acceptance
-  criteria, implementation review and replanning. Spend reasoning on decisions,
-  not mechanical edits.
-- **OpenCode / Muse Spark 1.3 Contributor** implements the completed plan, changes
-  files, adds/updates tests, runs project checks and fixes ordinary compiler,
-  typecheck, lint and test failures autonomously. It must not invent architecture.
-- This orchestration applies to Codex. An OpenCode executor reading these rules
-  implements the supplied plan directly; it must not recursively delegate or
-  invoke the executor again, select another model or launch other agents.
-- Codex may directly handle obvious one-liners, very small local fixes, pure
-  documentation, trivial configuration and small changes needing no design
-  decision. Avoid delegation overhead for these. Initial workflow installation
-  and safe setup checks are handled directly; do not start a feature run to test it.
+- **Codex / Astra** owns detailed repository analysis, architecture and API
+  decisions, dependency selection, risks, `.agents/PLAN.md` and replanning.
+  Spend context and reasoning before handoff: prioritize unambiguous behavior,
+  correct architecture, little interpretation and fewer reruns before plan brevity.
+- **OpenCode / Muse Spark 1.3 Contributor / medium** implements the binding plan,
+  updates tests, fixes ordinary compile/type/lint/test failures, performs the
+  implementation self-review and writes `.agents/IMPLEMENTATION_REPORT.md`.
+- Muse may choose unspecified local implementation details and small technical
+  adjustments within the prescribed architecture. It must not choose another
+  architecture, change unauthorized public APIs, introduce unplanned abstractions,
+  expand component scope, refactor adjacent code or reinterpret requirements.
+  If a necessary missing decision admits multiple materially different solutions,
+  stop with BLOCKED and identify the exact decision. Do not invent a design.
+- Executors implement directly: no recursive delegation, other agents or model
+  switches. Preserve user changes; never stash/reset/clean them for baseline tests.
+- Codex may directly handle tiny local fixes, pure documentation, trivial
+  configuration and workflow setup/maintenance with its safe validation. Do not
+  start a product implementation merely to test the executor.
 
 ### Standard cycle
 
-1. Analyze the task and only the relevant repository areas. Read applicable rules
-   and skills, understand the current `git status`, and preserve user changes.
-2. Create/update root `PLAN.md`: resolve architecture decisions, define concrete
-   work packages, known files, constraints, checks and acceptance criteria.
-   Planning must be complete before delegation; task authorization is sufficient
-   unless an actual unresolved decision or permission requires user input.
-3. For non-trivial implementation, use
-   `.agents/skills/opencode-executor/SKILL.md`; Codex does not implement the plan
-   itself unless the direct-change exception applies.
-4. Let OpenCode finish autonomously. Do not mirror each action or repeatedly send
-   file contents it can read itself. Retain its final result and check outcomes.
-5. Review `git status`, `git diff`, staged and new files, relevant test results,
-   applicable typecheck/lint results, agreement with `PLAN.md`, and every acceptance
-   criterion. Compare against the pre-run baseline; do not attribute user edits to Muse.
-   Use the existing commands above (`npm run build` includes typecheck); no separate
-   lint script currently exists. Run or inspect the relevant checks; avoid repeating
-   successful checks unless changes, failures or missing evidence justify it.
-6. Ordinary implementation failure stays with Muse. A contradictory/impossible
-   plan, missing API/data-model decision or architectural conflict means **STOP**:
-   Muse reports what is blocked, why, and which planning decision is needed.
-   Codex revisits that area, updates `PLAN.md`, then delegates again. Do not increase
-   effort to substitute for missing planning. Do not endlessly retry an unchanged blocker.
-7. Report completion only after review and acceptance; otherwise report the blocker.
+1. Codex reads applicable agent rules/skills, identifies relevant modules and
+   inspects existing patterns, tests, APIs and types before writing the plan.
+   Capture and understand dirty/staged/untracked changes and preserve them.
+2. Write the detailed `.agents/PLAN.md` using the linked plan template. Resolve
+   architectural choices before delegation. Existing task authorization suffices;
+   only a real unresolved decision or permission needs user input.
+3. Run `.agents/skills/opencode-executor/scripts/execute-plan.sh`. Let Muse finish
+   autonomously; do not mirror edits or repeatedly supply files it can read.
+4. Muse executes tasks and verification in order, then self-reviews its complete
+   change set (including staged/new files) against the baseline and each acceptance
+   criterion: correctness, security, architecture, preserved behavior and scope.
+   Fix ordinary issues, record actual check outcomes, and write the compact report.
+5. Codex routes by the current report and executor result:
+   - **SUCCESS**, no deviations/blockers and successful executor: read the report
+     only and briefly tell the user the outcome. No automatic second full review,
+     diff/file reread, test rerun or repository reanalysis.
+   - **PARTIAL**: read the report, inspect only the unresolved area if necessary,
+     and choose a targeted Muse correction or replanning.
+   - **BLOCKED**: read the precise blocker, analyze only relevant files, resolve
+     the missing decision in `.agents/PLAN.md`, then delegate again.
+   - Missing/invalid/stale report, nonzero CLI exit or contradictory SUCCESS:
+     do not claim success. Diagnose the reported execution/verification gap only.
+6. Do not automatically retry an unchanged blocker or increase effort to compensate
+   for missing planning. On SUCCESS mark the plan completed without a second review;
+   never execute a stale/completed plan as a new task.
 
-### Compact plan contract
+### Detailed plan contract
 
-Use `.agents/skills/opencode-executor/references/plan-template.md` for root
-`PLAN.md`: `Goal`, `Constraints`, numbered `Tasks` with `Files`, `Changes`,
-`Verification`, then `Acceptance Criteria`. Keep it executable, not essayistic:
-only relevant files, specific changes, concrete checks and settled design decisions.
-Do not repeat the repository architecture. Record the understood dirty-file baseline
-and any explicitly authorized effort override under Constraints. After completion,
-mark the plan completed; never execute a stale/completed plan for a new task.
+Canonical plan: `.agents/PLAN.md`; root `PLAN.md` is not executable input.
+Use `.agents/skills/opencode-executor/references/plan-template.md`.
+Plans may be long, but include only repository context relevant to the feature.
+Specify exact target behavior; current modules/interfaces/patterns; existing and
+new files; named functions/components/signatures/exports; types and data structures;
+component boundaries; data and control flow; API/error/state/persistence behavior;
+side effects; required utilities; prohibited alternatives; ordered implementation
+steps and dependencies; happy/edge/failure tests; commands and acceptance criteria.
+Mark inapplicable areas explicitly rather than inventing unnecessary abstractions.
+Record the dirty baseline, known existing check failures and any effort override.
+Do not use vague instructions such as "implement appropriately", "adjust as needed",
+"use best practices" or "refactor if necessary". Make the decision before handoff.
+
+### Implementation report contract
+
+Use `.agents/skills/opencode-executor/references/implementation-report-template.md`.
+Keep `.agents/IMPLEMENTATION_REPORT.md` compact: Status (SUCCESS/PARTIAL/BLOCKED),
+Implemented, Changed Files, Verification, Plan Deviations, Blockers. No full diffs,
+long explanations or repeated plan. Report every deviation explicitly.
+SUCCESS means every required task, check and acceptance criterion is satisfied
+and self-review is complete. PARTIAL means work/checks remain; BLOCKED means a
+specific decision, permission, dependency or execution condition prevents progress.
+Known baseline failures must be reported accurately; they are not a blanket excuse
+for missing required verification. Any accepted baseline exception must be explicit
+in the plan. Skipped checks are never described as passed. Do not publish SUCCESS
+with unresolved blockers. A process exit 0 alone does not prove success.
 
 ### Model and reasoning policy
 
@@ -196,14 +230,15 @@ mark the plan completed; never execute a stale/completed plan for a new task.
 - `xhigh` requires an explicit user request and the executor's explicit opt-in.
   Never escalate automatically. Provider default is not a substitute for `medium`.
 - Conceptually use **Astra Mid** for ordinary planning, refactoring, bug analysis
-  and review; **Astra High** for major architecture, complex migrations, systemic
+  and focused replanning; **Astra High** for major architecture, complex migrations, systemic
   bugs, tightly coupled components or difficult replanning. These are reasoning
   guidelines, not a claim that repository instructions change the running Codex
   model/effort; use the host's available settings when supported.
 - User-supplied Muse limits for this workflow (not CLI-verified quotas): 45,300
   requests / 5 hours; 113,300 / week; 226,600 / month. Prioritize reliable execution,
-  fewer reruns, clear handoff and compact context before minimizing individual
-  requests. Do not infer guaranteed service capacity from these figures.
-- Review primarily `PLAN.md` + diff + affected files + check results. Broaden
-  analysis only for a real planning problem. Preserve existing skills, architecture
-  and user changes; add no unrelated dependencies or refactors.
+  fewer reruns and detailed handoff before minimizing planning tokens; savings
+  primarily come after delegation and from avoiding duplicate reviews. Do not infer guaranteed service capacity from these figures.
+- Codex may deliberately use more reasoning and repository context in planning.
+  After SUCCESS, use the report-only path; expand analysis only for reported
+  problems or an explicit review request. Preserve skills, architecture and user
+  changes; add no unrelated dependencies or refactors.

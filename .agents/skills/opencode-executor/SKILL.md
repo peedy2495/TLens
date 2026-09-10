@@ -1,60 +1,69 @@
 ---
 name: opencode-executor
-description: Delegate a completed repository PLAN.md to OpenCode with Muse Spark 1.3 Contributor, then review its changes and checks. Use for non-trivial planned implementation, not planning, trivial edits or setup-only validation.
+description: Delegate a detailed .agents/PLAN.md to OpenCode with Muse Spark 1.3 Contributor, then route its compact implementation report. Use for non-trivial planned implementation, not planning, trivial edits or workflow setup/maintenance.
 ---
 
 # OpenCode executor
 
-Follow the roles, effort routing and failure policy in `../../AGENTS.md`.
+Follow roles, detailed planning, self-review, reporting and effort policy in
+`../../AGENTS.md`. Spend Codex reasoning before handoff; do not duplicate Muse's
+successful implementation review.
 
 ## Before execution
 
-- Root `PLAN.md` exists, is current and actionable; Codex has completed planning
-  and resolved architectural decisions. Use [the template](references/plan-template.md)
-  only when preparing a plan, not to overwrite an existing one.
-- This is an authorized non-trivial implementation, not setup validation.
-- Capture and understand `git status --short`, `git diff` and `git diff --cached`;
-  inspect relevant untracked files. Record the baseline in the plan/handoff.
-  Preserve user edits; do not stash, reset or clean them automatically.
+- Analyze relevant rules/skills, modules, patterns, tests, APIs and types. Capture
+  and understand status, unstaged/staged diffs and relevant untracked files.
+  Preserve all user edits; never stash, reset or clean them automatically.
+- Write a current, actionable `.agents/PLAN.md` with the
+  [detailed plan template](references/plan-template.md). Resolve material design
+  decisions; specify files, symbols, interfaces, state/error/persistence behavior,
+  flows, prohibited alternatives, exact tasks, tests and acceptance criteria.
+- Never execute a stale/completed plan. Root `PLAN.md` is not executor input.
+- Existing task authorization suffices; do not ask for another routine approval.
 
 ## Execute
 
 Run `bash .agents/skills/opencode-executor/scripts/execute-plan.sh` from the root,
-or call the script by absolute path from any directory. Default effort is medium.
-Supported overrides: `--effort minimal|low|medium|high|xhigh`; justify in PLAN.md.
-`xhigh` additionally requires `--allow-xhigh`, only after an explicit user request.
+or use its absolute path. Default medium. Overrides
+`--effort minimal|low|medium|high|xhigh` require justification in `.agents/PLAN.md`;
+xhigh also requires explicit user authorization and `--allow-xhigh`.
 
-Wait for the process to finish using the host's process/session tools, with concise
-progress updates when needed. Do not interactively duplicate its implementation.
-Do not launch a second executor against the same worktree while one is running.
-The prompt assigns Muse implementation ownership, project checks and ordinary
-failure repair; architectural blockers return to Codex.
+Wait for completion with concise progress updates. Do not duplicate implementation
+or run another executor against the same worktree. Muse owns implementation,
+ordinary failure repair, checks, complete self-review against the baseline and
+acceptance criteria, and the compact
+[implementation report](references/implementation-report-template.md).
 
-The script pins the verified contributor model and `build` agent. It does not
-auto-approve permissions, share sessions, continue an unrelated session or retry
-with another model. Respect execution-environment approvals. A denied permission
-or unavailable model is a concrete blocker, not permission to bypass restrictions
-or silently implement in Codex. CLI exit failures propagate; a successful exit
-alone does not prove acceptance or rule out a blocker in the final report.
+The script pins Contributor/build, does not auto-approve permissions, share
+sessions, retry or switch model. A permission/model/tool failure is a concrete
+blocker, not permission to bypass restrictions or implement through a fallback.
+Before a live run it replaces the prior report with a pending BLOCKED report so
+an old SUCCESS cannot be accepted. --check does not mutate a report or call Muse.
 
-## Review
+## After execution
 
-1. Inspect final output and checks, then `git status --short`, `git diff`,
-   `git diff --cached` and relevant new files against the baseline.
-2. Review relevant tests and applicable typecheck/lint evidence using existing
-   project commands. Execute missing checks or rerun when justified.
-3. Check each task and acceptance criterion in `PLAN.md`. Report changed files,
-   check outcomes and any remaining limitations concisely.
-4. Delegate ordinary implementation corrections with targeted feedback in PLAN.md.
-   For architecture/planning blockers, Codex resolves the missing decision first
-   and updates the plan before a new run. No automatic model or effort escalation.
+Read `.agents/IMPLEMENTATION_REPORT.md` and the executor outcome only first.
 
-## Setup-only validation
+- SUCCESS + no deviations/blockers + executor success: briefly report completion.
+  Do not automatically inspect the full diff, reread changed files, rerun checks
+  or reanalyze the repository. Mark the plan completed as a bookkeeping edit.
+- PARTIAL: determine from the report whether targeted correction or replanning is
+  needed. Inspect only the unresolved area and delegate a concrete revised plan.
+- BLOCKED: analyze only the named blocker, resolve the missing decision in the
+  plan, then delegate. No repeated identical blocker retries or effort escalation.
+- Missing/invalid report, nonzero CLI exit or SUCCESS with deviations/blockers:
+  do not claim success. Investigate only the reported gap. Explicit user requests
+  for review can authorize a broader review.
 
-`bash -n scripts/execute-plan.sh` checks syntax. `execute-plan.sh --check` validates
-paths, required files and CLI presence without invoking OpenCode; it deliberately
-fails if PLAN.md is missing. `scripts/test-executor.sh` uses an isolated temporary
-Git repo and a fake CLI to test invocation and failure handling without a model call.
-The actual CLI/model/variant evidence is in the repository README. Rediscover via
-`opencode --help`, `opencode run --help` and `opencode models opencode --verbose`
-only on setup/repair. Never use a real implementation run just to test installation.
+## Setup and validation
+
+Workflow setup/maintenance is handled directly by Codex. Do not use a feature run
+as a setup test. `bash -n scripts/execute-plan.sh` checks syntax;
+`scripts/test-executor.sh` uses only an isolated Git fixture and fake CLI.
+`execute-plan.sh --check` requires `.agents/PLAN.md`, validates local prerequisites
+without calling a model or overwriting the report. It does not validate credentials.
+
+Exit codes: CLI failures propagate unchanged; after CLI exit 0 the report gate
+returns 0 for clean SUCCESS, 2 for PARTIAL or SUCCESS requiring deviation/blocker
+triage, 3 for BLOCKED and 65 for missing/malformed report. Preconditions retain
+64 (arguments), 66 (files/repository) and 69 (CLI/tool unavailable).
