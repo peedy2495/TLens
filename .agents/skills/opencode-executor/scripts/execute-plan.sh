@@ -35,7 +35,7 @@ cd -- "$repo_root"
 command -v git >/dev/null 2>&1 || fail 69 'git is not available on PATH'
 git_root="$(git rev-parse --show-toplevel 2>/dev/null)" || fail 66 'Executor is not inside a Git repository'
 [[ "$(cd -- "$git_root" && pwd -P)" == "$repo_root" ]] || fail 66 'Script layout does not resolve to the repository root'
-for required in AGENTS.md .agents/AGENTS.md "$plan"; do
+for required in "$plan" .agents/skills/opencode-executor/references/implementation-report-template.md; do
   [[ -f "$required" && -r "$required" && -s "$required" ]] || fail 66 "Missing, empty or unreadable $repo_root/$required"
 done
 command -v opencode >/dev/null 2>&1 || fail 69 'opencode is not available on PATH; no implementation fallback will run'
@@ -71,11 +71,12 @@ BLOCKED
 
 - Current invocation has not produced an implementation report.
 REPORT
-prompt='Read AGENTS.md, .agents/AGENTS.md and .agents/PLAN.md. You are the implementation executor, not the planner. Treat the current ready .agents/PLAN.md as binding; if stale/completed, write BLOCKED and stop.
-Implement tasks and verification in the specified order, using the named utilities, symbols, types, interfaces and boundaries. Preserve the recorded dirty/staged/untracked baseline. Do not stash, reset or clean user work. Choose only unspecified local details and small technical adjustments within the prescribed architecture; fix ordinary compile/type/lint/test failures autonomously.
-Do not change architecture, unauthorized public APIs, introduce unplanned abstractions, expand scope, refactor adjacent areas, reinterpret requirements or implement alternative designs. A necessary missing decision with multiple materially different solutions means BLOCKED: identify the exact decision and stop. No recursive delegation, other agents, model switches, commit, push, deployment or permission changes. Report unavailable tools/model/permissions without fallback. Do not ask interactive clarification.
-After implementation and checks, self-review your complete diff, staged/new files and actual test results against the baseline and each acceptance criterion, including correctness, security, architecture, scope and preserved behavior. Repair ordinary issues yourself. Do not claim skipped/failed checks passed.
-Overwrite .agents/IMPLEMENTATION_REPORT.md using .agents/skills/opencode-executor/references/implementation-report-template.md: Status (SUCCESS/PARTIAL/BLOCKED), Implemented, Changed Files, Verification, Plan Deviations, Blockers. Keep it short: exact outcomes and paths, no full diffs, long explanations or repeated plan. Explicitly record every deviation. SUCCESS requires completed work, required checks, acceptance and self-review; PARTIAL means work/checks remain; BLOCKED means a precise missing decision or execution blocker. Mark .agents/PLAN.md completed on SUCCESS. Finish with only the report status and path; Codex reads the report and does not repeat successful self-review.'
+prompt='Read .agents/PLAN.md first. You are the implementation executor, not the planner. Treat the current Ready plan as binding; if stale/completed, write BLOCKED and stop.
+Read only task skills/references explicitly listed under Relevant Instructions in the plan. Do not read root AGENTS.md, .agents/AGENTS.md, unrelated skills/references, product history or Git history unless the plan explicitly requires a specific lookup.
+Implement the planned changes while preserving recorded dirty/staged/untracked user work. Do not stash, reset or clean user work. You may choose unspecified local implementation details and make small technical adjustments that do not alter architecture, public contracts, persisted-data semantics or task scope. Fix ordinary compile/type/test failures caused by your changes autonomously.
+If implementation requires a materially missing decision with substantially different architectural/public/persistence/security outcomes, write BLOCKED with that exact decision and stop. Do not expand scope, perform unrelated refactors, recursively delegate, switch models, commit, push, deploy or change permissions.
+Run only verification requested by the plan. Then self-review your actual changed/staged/new files against the plan, acceptance criteria and preserved user work; repair ordinary issues yourself. Never claim skipped or failed checks passed.
+Overwrite .agents/IMPLEMENTATION_REPORT.md using .agents/skills/opencode-executor/references/implementation-report-template.md: Status (SUCCESS/PARTIAL/BLOCKED), Implemented, Changed Files, Verification, Plan Deviations, Blockers. Keep it compact and factual; do not repeat the plan or include full diffs. SUCCESS requires completed planned work, requested checks and self-review. Mark .agents/PLAN.md Completed on SUCCESS. Finish with only the report status and path.'
 status=0
 opencode run --agent build --model "$model" --variant "$effort" "$prompt" </dev/null || status=$?
 printf '\nExecutor CLI exit: %s. Report: %s\n' "$status" "$report"
