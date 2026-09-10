@@ -5,6 +5,7 @@ set -euo pipefail
 readonly model='opencode/muse-spark-1.3-contributor-free'
 readonly plan='.agents/PLAN.md'
 readonly report='.agents/IMPLEMENTATION_REPORT.md'
+readonly report_template='.agents/skills/opencode-executor/references/implementation-report-template.md'
 effort='medium'
 check_only=false
 allow_xhigh=false
@@ -35,7 +36,7 @@ cd -- "$repo_root"
 command -v git >/dev/null 2>&1 || fail 69 'git is not available on PATH'
 git_root="$(git rev-parse --show-toplevel 2>/dev/null)" || fail 66 'Executor is not inside a Git repository'
 [[ "$(cd -- "$git_root" && pwd -P)" == "$repo_root" ]] || fail 66 'Script layout does not resolve to the repository root'
-for required in "$plan" .agents/skills/opencode-executor/references/implementation-report-template.md; do
+for required in "$plan" "$report_template"; do
   [[ -f "$required" && -r "$required" && -s "$required" ]] || fail 66 "Missing, empty or unreadable $repo_root/$required"
 done
 command -v opencode >/dev/null 2>&1 || fail 69 'opencode is not available on PATH; no implementation fallback will run'
@@ -71,14 +72,62 @@ BLOCKED
 
 - Current invocation has not produced an implementation report.
 REPORT
-prompt='Read .agents/PLAN.md first. You are the implementation executor, not the planner. Treat the current Ready plan as binding; if stale/completed, write BLOCKED and stop.
-Read only task skills/references explicitly listed under Relevant Instructions in the plan. Do not read root AGENTS.md, .agents/AGENTS.md, unrelated skills/references, product history or Git history unless the plan explicitly requires a specific lookup.
-Implement the planned changes while preserving recorded dirty/staged/untracked user work. Do not stash, reset or clean user work. You may choose unspecified local implementation details and make small technical adjustments that do not alter architecture, public contracts, persisted-data semantics or task scope. Fix ordinary compile/type/test failures caused by your changes autonomously.
-If implementation requires a materially missing decision with substantially different architectural/public/persistence/security outcomes, write BLOCKED with that exact decision and stop. Do not expand scope, perform unrelated refactors, recursively delegate, switch models, commit, push, deploy or change permissions.
-Run only verification requested by the plan. Then self-review your actual changed/staged/new files against the plan, acceptance criteria and preserved user work; repair ordinary issues yourself. Never claim skipped or failed checks passed.
-Overwrite .agents/IMPLEMENTATION_REPORT.md using .agents/skills/opencode-executor/references/implementation-report-template.md: Status (SUCCESS/PARTIAL/BLOCKED), Implemented, Changed Files, Verification, Plan Deviations, Blockers. Keep it compact and factual; do not repeat the plan or include full diffs. SUCCESS requires completed planned work, requested checks and self-review. Mark .agents/PLAN.md Completed on SUCCESS. Finish with only the report status and path.'
+# Build one deterministic handoff prompt. Stable executor rules and stable task skills
+# precede the changing plan so providers can reuse the longest possible prompt prefix.
+# Project AGENTS discovery is disabled for the delegated run because Codex has already
+# routed and distilled the applicable instructions into this handoff.
+mapfile -t relevant_instructions < <(
+  awk '
+    /^# Relevant Instructions[[:space:]]*$/ { active=1; next }
+    /^# / && active { exit }
+    active {
+      line=$0
+      if (line ~ /^-[[:space:]]+`[^`]+`[[:space:]]*$/) {
+        sub(/^-[[:space:]]+`/, "", line)
+        sub(/`[[:space:]]*$/, "", line)
+        print line
+      }
+    }
+  ' "$plan" 2>/dev/null | LC_ALL=C sort -u
+)
+for instruction in "${relevant_instructions[@]}"; do
+  [[ "$instruction" == .agents/skills/* ]] || fail 65 "Relevant instruction must be below .agents/skills/: $instruction"
+  [[ "$instruction" != *'..'* ]] || fail 65 "Relevant instruction may not contain '..': $instruction"
+  [[ -f "$instruction" && -r "$instruction" && -s "$instruction" ]] || fail 66 "Missing, empty or unreadable relevant instruction: $instruction"
+done
+prompt_file="$(mktemp "${TMPDIR:-/tmp}/dlens-muse-handoff.XXXXXXXX")"
+trap 'rm -f -- "$prompt_file"' EXIT
+cat > "$prompt_file" <<'PROMPT'
+# DLens delegated implementation executor
+
+You are the implementation executor, not the planner. The handoff below is the complete task context supplied by Codex.
+Treat a Ready plan as binding; if it is stale or completed, write BLOCKED and stop.
+Preserve recorded dirty/staged/untracked user work. Never stash, reset or clean user work.
+You may choose unspecified local implementation details and make small technical adjustments that do not alter architecture, public contracts, persisted-data semantics, security boundaries or task scope.
+Fix ordinary compile/type/test failures caused by your changes autonomously.
+If implementation requires a materially missing decision with substantially different architectural/public/persistence/security outcomes, write BLOCKED with that exact decision and stop.
+Do not expand scope, perform unrelated refactors, inspect product/Git history unless explicitly required by the plan, recursively delegate, switch models, commit, push, deploy or change permissions.
+Run only verification requested by the plan. Then self-review actual changed/staged/new files against the plan, acceptance criteria and preserved user work; repair ordinary issues yourself. Never claim skipped or failed checks passed.
+Keep the implementation report compact and factual; do not repeat the plan or include full diffs. SUCCESS requires completed planned work, requested checks and self-review. Mark .agents/PLAN.md Completed on SUCCESS. Finish with only the report status and path.
+
+# Implementation report format
+PROMPT
+cat "$report_template" >> "$prompt_file"
+printf '\n# Task instructions\n' >> "$prompt_file"
+if ((${#relevant_instructions[@]} == 0)); then
+  printf '%s\n' 'No additional task skill/reference was supplied.' >> "$prompt_file"
+else
+  for instruction in "${relevant_instructions[@]}"; do
+    printf '\n## Instruction: %s\n' "$instruction" >> "$prompt_file"
+    cat "$instruction" >> "$prompt_file"
+    printf '\n' >> "$prompt_file"
+  done
+fi
+printf '\n# Task plan\n' >> "$prompt_file"
+cat "$plan" >> "$prompt_file"
+prompt="$(cat "$prompt_file")"
 status=0
-opencode run --agent build --model "$model" --variant "$effort" "$prompt" </dev/null || status=$?
+OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode run --agent build --model "$model" --variant "$effort" "$prompt" </dev/null || status=$?
 printf '\nExecutor CLI exit: %s. Report: %s\n' "$status" "$report"
 if ((status != 0)); then
   printf 'Executor: OpenCode failed; no retry or model fallback. Inspect the error and report, not a second full code review.\n' >&2

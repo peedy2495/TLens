@@ -25,6 +25,7 @@ Load a skill only when its scope is materially relevant. Mixed tasks may load mu
 - UI components, interaction, styling, accessibility, responsive behavior: `.agents/skills/ui/SKILL.md`
 - Test strategy, test infrastructure, or substantial test-only work: `.agents/skills/testing/SKILL.md`
 - Delegated implementation through OpenCode/Muse: `.agents/skills/opencode-executor/SKILL.md`
+- Agent instructions, skill structure, routing, references, or executor-workflow maintenance: `.agents/skills/agent-maintenance/SKILL.md`
 
 ## Context discipline
 
@@ -32,3 +33,4 @@ Load a skill only when its scope is materially relevant. Mixed tasks may load mu
 - Load a reference only when it answers a concrete question raised by the task or implementation.
 - Do not read every reference in a skill by default.
 - Prefer focused plans for local work. Use architecture-level planning only when interfaces, persistence semantics, multiple subsystems, security boundaries, or migration behavior require it.
+- For delegated execution, keep stable skill/reference instructions separate from task-local plan content; the executor composes them in cache-friendly deterministic order.

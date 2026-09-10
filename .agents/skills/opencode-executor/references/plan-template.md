@@ -4,7 +4,7 @@ Ready: state the exact observable end state in a few sentences.
 
 # Relevant Instructions
 
-List only task-specific skills/references Muse needs, using exact paths. Use `none` when the plan itself contains all required constraints.
+List only task-specific skills/references Muse needs, using exact paths. Keep this list stable and minimal; the executor sorts paths before composing the handoff so identical skill sets form a reusable prompt prefix. Use `none` when the plan itself contains all required constraints.
 
 - `.agents/skills/.../SKILL.md`
 

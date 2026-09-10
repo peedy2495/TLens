@@ -23,7 +23,7 @@ Run `bash .agents/skills/opencode-executor/scripts/execute-plan.sh` from the rep
 
 Muse owns implementation, ordinary failure repair, relevant verification and a self-review of its actual changes against the plan. Do not run a second executor against the same worktree.
 
-The executor is intentionally narrow: Muse reads `.agents/PLAN.md` plus only task skills/references explicitly named by that plan. It does not need to reread root/global AGENTS files.
+The executor is intentionally narrow. It builds one deterministic handoff prompt in this order: stable executor contract, stable report format, task skills/references sorted by path, then the changing `.agents/PLAN.md`. This keeps reusable context before task-local context and avoids model-side file-reading turns. Project `AGENTS.md` auto-discovery is disabled for the delegated OpenCode process because Codex has already routed the applicable instructions. Global OpenCode instructions may still apply.
 
 The script pins the configured model/build and does not auto-approve permissions, retry, switch models, commit, push or deploy. Tool/model/permission failure is a blocker, not permission to use a fallback.
 
