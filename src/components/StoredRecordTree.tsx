@@ -86,7 +86,7 @@ function StoredBranch(props: {
   path: string[];
   language: "de" | "en";
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const { entry, ...tree } = props;
   if (entry.kind === "value")
     return (

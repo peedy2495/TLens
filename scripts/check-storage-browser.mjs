@@ -77,10 +77,18 @@ try {
   await page.screenshot({ path: root + "/import.png", fullPage: true });
   await page.click("tbody tr");
   await page.waitForSelector(".record-tree details");
-  await page.click(".record-tree summary");
   await page.waitForFunction(
-    () => document.querySelectorAll(".record-tree details").length > 1,
+    () => document.querySelectorAll(".record-tree details").length > 1 &&
+      document.querySelector(".record-dialog")?.textContent.includes("p1"),
   );
+  assert.equal(await page.$$eval(".record-tree details", (nodes) => nodes.every((node) => node.open)), true);
+  await page.click(".record-tree summary");
+  await page.waitForFunction(() => document.querySelector(".record-tree details")?.open === false);
+  await page.click('.record-dialog button[aria-label="Schließen"]');
+  await page.waitForSelector(".record-dialog", { hidden: true });
+  await page.click("tbody tr");
+  await page.waitForFunction(() => document.querySelector(".record-dialog")?.textContent.includes("p1"));
+  assert.equal(await page.$$eval(".record-tree details", (nodes) => nodes.length > 1 && nodes.every((node) => node.open)), true);
   await page.reload();
   await page.waitForSelector(".source-button");
   await page.click(".source-button");
