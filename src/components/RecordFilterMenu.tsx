@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 export type RecordMenu = {
   x: number;
@@ -10,11 +10,7 @@ export function openRecordMenuAt(
   event: { clientX: number; clientY: number },
   label: string,
 ): NonNullable<RecordMenu> {
-  const width = 240;
-  const height = 64;
-  const x = Math.max(8, Math.min(event.clientX, window.innerWidth - width));
-  const y = Math.max(8, Math.min(event.clientY, window.innerHeight - height));
-  return { x, y, label };
+  return { x: event.clientX, y: event.clientY, label };
 }
 
 export function menuPositionForRect(rect: { left: number; bottom: number }): {
@@ -36,8 +32,23 @@ export function RecordFilterMenu({
   onClose: () => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (!element) return;
+    element.style.left = `${menu.x}px`;
+    element.style.top = `${menu.y}px`;
+    const rect = element.getBoundingClientRect();
+    const viewport = element.ownerDocument.defaultView!;
+    const x = Math.max(0, Math.min(menu.x, viewport.innerWidth - rect.width));
+    const y = Math.max(0, Math.min(menu.y, viewport.innerHeight - rect.height));
+    // The transformed dialog is the fixed-position containing block.
+    // Translate viewport coordinates without moving outside its focus scope.
+    element.style.left = `${menu.x + x - rect.left}px`;
+    element.style.top = `${menu.y + y - rect.top}px`;
+  }, [menu.x, menu.y, language]);
   useEffect(() => {
-    buttonRef.current?.focus();
+    buttonRef.current?.focus({ preventScroll: true });
     const onPointer = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest?.("[data-record-menu]")) onClose();
@@ -61,6 +72,7 @@ export function RecordFilterMenu({
   }, [onClose]);
   return (
     <div
+      ref={menuRef}
       data-record-menu
       role="menu"
       aria-label={menu.label}
