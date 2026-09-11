@@ -4,16 +4,16 @@ SUCCESS | PARTIAL | BLOCKED
 
 # Implemented
 
-- Completed task IDs; indicate remaining tasks concisely when not SUCCESS.
+- Maximum 5 concise bullets covering observable completed work; on PARTIAL/BLOCKED include only the material remaining item.
 
 # Changed Files
 
-- Actual changed/new paths attributable to this run, not pre-existing user edits.
+- Paths only, grouped on one line when practical; do not describe diffs or repeat implementation details.
 
 # Verification
 
-- Exact command: passed | failed (brief reason) | not run (brief reason).
-- Self-review against baseline and acceptance criteria: passed | incomplete.
+- Requested checks only: `command` — passed | failed | not run (brief reason).
+- Self-review — passed | incomplete.
 
 # Plan Deviations
 

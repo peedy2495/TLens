@@ -27,10 +27,10 @@ Name exact interfaces/types/state/persistence details only when they constrain t
 
 # Verification
 
-Run only checks meaningful for this change, in order:
+Run only checks meaningful for this change, in order. The executor owns ordinary repair and reruns within the same execution; do not plan a routine Codex verification pass afterward.
 
-1. Focused check/test.
-2. Broader build/test only when scope or risk warrants it.
+1. Smallest focused check/test that proves the changed behavior.
+2. Broader build/test only when scope or risk warrants it; avoid broad suites "just in case".
 3. `git diff --check` when applicable.
 4. Self-review actual changes against this plan and preserve unrelated user work.
 
