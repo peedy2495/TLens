@@ -41,6 +41,7 @@ for required in "$plan" "$report_template"; do
 done
 command -v opencode >/dev/null 2>&1 || fail 69 'opencode is not available on PATH; no implementation fallback will run'
 command -v awk >/dev/null 2>&1 || fail 69 'awk is required for report validation'
+command -v node >/dev/null 2>&1 || fail 69 'node is required for structured report recovery'
 printf 'Repository: %s\nPlan: %s\nModel: %s\nEffort: %s\n' "$repo_root" "$plan" "$model" "$effort"
 if [[ "$check_only" == true ]]; then
   printf '%s\n' 'Local prerequisites OK. No model call or report write; credentials and service availability are untested.'
@@ -96,7 +97,10 @@ for instruction in "${relevant_instructions[@]}"; do
   [[ -f "$instruction" && -r "$instruction" && -s "$instruction" ]] || fail 66 "Missing, empty or unreadable relevant instruction: $instruction"
 done
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/dlens-muse-handoff.XXXXXXXX")"
-trap 'rm -f -- "$prompt_file"' EXIT
+events_file="$(mktemp "${TMPDIR:-/tmp}/dlens-muse-events.XXXXXXXX")"
+placeholder_file="$(mktemp "${TMPDIR:-/tmp}/dlens-muse-placeholder.XXXXXXXX")"
+cp -- "$report" "$placeholder_file"
+trap 'rm -f -- "$prompt_file" "$events_file" "$placeholder_file"' EXIT
 cat > "$prompt_file" <<'PROMPT'
 # DLens delegated implementation executor
 
@@ -109,7 +113,7 @@ Own ordinary implementation repair in this same run. Fix compile/type/test failu
 If implementation requires a materially missing decision with substantially different architectural/public/persistence/security outcomes, write BLOCKED with that exact decision and stop.
 Do not expand scope, perform unrelated refactors, inspect product/Git history unless explicitly required by the plan, recursively delegate, switch models, commit, push, deploy or change permissions.
 Run only verification requested by the plan. Then self-review actual changed/staged/new files against the plan, acceptance criteria and preserved user work; repair ordinary issues yourself. Never claim skipped or failed checks passed.
-Keep the implementation report compact and factual: no plan repetition, full diffs, debugging transcript, chronology, or commentary. SUCCESS requires completed planned work, requested checks and self-review. Mark .agents/PLAN.md Completed on SUCCESS. Finish with only the report status and path.
+Write the implementation report to .agents/IMPLEMENTATION_REPORT.md using a file tool before finishing; printing it alone does not fulfill the handoff. Keep the implementation report compact and factual: no plan repetition, full diffs, debugging transcript, chronology, or commentary. SUCCESS requires completed planned work, requested checks and self-review. Mark .agents/PLAN.md Completed on SUCCESS. Finish with only the report status and path.
 
 # Implementation report format
 PROMPT
@@ -128,11 +132,17 @@ printf '\n# Task plan\n' >> "$prompt_file"
 cat "$plan" >> "$prompt_file"
 prompt="$(cat "$prompt_file")"
 status=0
-OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode run --agent build --model "$model" --variant "$effort" "$prompt" </dev/null || status=$?
+OPENCODE_DISABLE_PROJECT_CONFIG=1 opencode run --agent build --model "$model" --variant "$effort" --format json "$prompt" </dev/null >"$events_file" || status=$?
 printf '\nExecutor CLI exit: %s. Report: %s\n' "$status" "$report"
 if ((status != 0)); then
+  cat -- "$events_file" >&2
   printf 'Executor: OpenCode failed; no retry or model fallback. Inspect the error and report, not a second full code review.\n' >&2
   exit "$status"
+fi
+if [[ ! -s "$report" ]] || cmp -s -- "$report" "$placeholder_file"; then
+  if node "$script_dir/recover-report.mjs" "$events_file" "$report"; then
+    printf '%s\n' 'Executor: recovered report from final assistant output; validating it normally.'
+  fi
 fi
 [[ -f "$report" && -s "$report" ]] || fail 65 'Current implementation report is missing or empty'
 section() {

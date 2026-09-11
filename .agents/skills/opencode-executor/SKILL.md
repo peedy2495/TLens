@@ -17,7 +17,7 @@ The default workflow is exactly three phases: one focused Codex handoff, one aut
 - Write `.agents/PLAN.md` using `references/plan-template.md`.
 - Default to a focused plan. Add optional architecture detail only when interfaces, persistence semantics, multiple subsystems, concurrency/security boundaries, or migration behavior require it.
 - In the plan, list the exact task skills/references Muse may read. Do not pass global agent files merely as background context.
-- Put all ordinary verification and repair expectations in the initial plan. Do not reserve a routine second pass for Codex.
+- Put all ordinary verification and repair expectations in the initial plan, including tracked scripts/tests for meaningful browser regressions rather than temporary-only probes. Do not reserve a routine second pass for Codex.
 - Never execute a stale/completed plan. Root `PLAN.md` is not executor input.
 
 ## Execute
@@ -29,6 +29,8 @@ Muse owns implementation, ordinary failure repair, requested verification and se
 The delegated process should be quiet: no narrated progress, running commentary, repeated summaries, or explanations of tool calls. It should use tools, repair ordinary failures, write the compact implementation report, and finish with only report status/path. User-visible progress belongs to Codex only when genuinely useful.
 
 The executor builds one deterministic handoff prompt in this order: stable executor contract, stable report format, task skills/references sorted by path, then the changing `.agents/PLAN.md`. This keeps reusable context before task-local context and avoids model-side file-reading turns. Project `AGENTS.md` auto-discovery is disabled for the delegated OpenCode process because Codex has already routed the applicable instructions. Global OpenCode instructions may still apply.
+
+Write the report to `.agents/IMPLEMENTATION_REPORT.md`, not merely to the final response. The runner captures structured CLI events and may recover one complete report from the last assistant text event only if the file is missing, empty or still the untouched invocation placeholder. It never replaces a written report, retries the model, or treats CLI failure as success; recovered reports pass the same validation and deviation/blocker checks.
 
 The script pins the configured model/build and does not auto-approve permissions, retry, switch models, commit, push or deploy. Tool/model/permission failure is a blocker, not permission to use a fallback.
 
@@ -45,4 +47,4 @@ Read only `.agents/IMPLEMENTATION_REPORT.md` and the executor outcome first. Tre
 
 ## Workflow maintenance
 
-Maintain/test this workflow directly with Codex rather than through a feature delegation. `scripts/test-executor.sh` uses an isolated Git fixture and fake CLI. `execute-plan.sh --check` validates local prerequisites without a model call or report mutation.
+Maintain/test this workflow directly with Codex rather than through a feature delegation. `scripts/test-executor.sh` uses an isolated Git fixture and fake CLI; set `TMPDIR` to an executable filesystem when `/tmp` is mounted `noexec`. `execute-plan.sh --check` validates local prerequisites without a model call or report mutation.

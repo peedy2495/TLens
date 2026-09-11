@@ -11,3 +11,4 @@ description: Test strategy, test infrastructure and substantial test-only work. 
 - For persistence/import work, prioritize failure, cancellation, rollback/data-preservation and boundary cases when relevant.
 - For UI work, test externally observable behavior rather than incidental implementation details.
 - Reuse existing fixtures/helpers before creating new test infrastructure.
+- Keep meaningful browser regressions in tracked tests or `scripts/`, with a reproducible command and isolated fixtures/profiles. Temporary probes are exploratory evidence, not durable regression coverage; retain a focused check when it protects a recurring failure.
