@@ -14,9 +14,22 @@ const server = await preview({
   appType: "mpa",
   build: { outDir: "dist" },
   preview: { host: values.host, port: Number(values.port), strictPort: true },
-  plugins: [{ name: "dlens-preview-relay", configurePreviewServer(server) {
-    server.middlewares.use("/api/import-url", (req, res) => void relay(req, res));
-  } }],
+  plugins: [
+    // Extensionless /settings serves the static settings page (same app
+    // shell as /settings/); the browser URL stays clean either way.
+    { name: "dlens-preview-settings-route", configurePreviewServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const raw = req.url ?? "/";
+        if (raw === "/settings" || raw.startsWith("/settings?")) {
+          req.url = `/settings/${raw.slice("/settings".length)}`;
+        }
+        next();
+      });
+    } },
+    { name: "dlens-preview-relay", configurePreviewServer(server) {
+      server.middlewares.use("/api/import-url", (req, res) => void relay(req, res));
+    } },
+  ],
 });
 server.printUrls();
 for (const signal of ["SIGINT", "SIGTERM"]) {

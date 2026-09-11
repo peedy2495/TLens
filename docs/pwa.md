@@ -13,7 +13,7 @@ paint. The manifest keeps the light `#f7f9fc` as static `theme_color` fallback.
 Production `npm run build` generates `dist/manifest.webmanifest`, `dist/sw.js`
 (Workbox GenerateSW) and precaches **only**:
 
-- `/` (`index.html`)
+- `/` (`index.html`) and `/settings/` (`settings/index.html`)
 - `_astro/**/*.{js,css,wasm,woff,woff2}` (app, SQLite workers, WASM runtime,
   including `virtual:pwa-register`/`workbox-window` chunks)
 - `favicon.svg`, `icons/*.png`
@@ -22,7 +22,7 @@ Production `npm run build` generates `dist/manifest.webmanifest`, `dist/sw.js`
 Per-file ceiling: 5 MiB. No runtime caching: demos, user files, credentials and
 HTTP/API responses are never cached – this includes `/api/import-url` relay
 payloads, which always hit the network. Navigation fallback serves `/` **only**
-for the root path with an optional query string; `/api/*` and other paths
+for the root and `/settings` (with optional trailing slash/query); `/api/*` and other paths
 return 404. In production `/api/import-url` is served by the Vercel function
 (`api/import-url.mjs`), never by the service worker; offline URL imports fail
 with the regular actionable import error.
@@ -68,3 +68,7 @@ import, cache contents, non-root fallback rejection, waiting-update behaviour
 (explicit reload preserves OPFS) and the synthetic install-prompt flow.
 Artifacts go to `artifacts/pwa-check/` (including desktop/mobile settings
 screenshots). `PWA_CHROME_PATH` (or `CHROME_PATH`) overrides the Chrome binary.
+
+## Settings navigation
+
+`/settings` opens the existing animated settings view directly and survives online or offline reloads. Opening settings from the workspace adds a browser history entry; Back and Forward switch views without resetting workspace state. The back control and Escape close settings, preserving reduced-motion and focus behavior. Escape consumed by a child dialog does not close settings.

@@ -192,6 +192,16 @@ try {
   assert.ok([400, 403, 404].includes(traversal.status), "traversal must be rejected");
   const apiRes = await fetch(`${origin}/api/records?table=events`);
   assert.equal(apiRes.status, 404, "non-root API paths must not fall back to index");
+  // Settings deep link serves the app shell; unknown paths must not.
+  for (const settingsPath of ["/settings", "/settings/"]) {
+    const settingsRes = await fetch(`${origin}${settingsPath}`);
+    assert.equal(settingsRes.status, 200, `${settingsPath} must serve the app`);
+    assert.match(settingsRes.headers.get("content-type") ?? "", /text\/html/);
+    const settingsBody = await settingsRes.text();
+    assert.ok(settingsBody.includes('id="root"') || settingsBody.includes("<body>"), `${settingsPath} must render the app shell`);
+  }
+  const unknownRes = await fetch(`${origin}/definitely-not-a-route`);
+  assert.equal(unknownRes.status, 404, "unknown paths must not fall back to index");
 
   const page = await browser.newPage();
   await page.goto(origin, { waitUntil: "networkidle0" });
@@ -351,6 +361,17 @@ try {
   } finally {
     await apiPage.close().catch(() => {});
   }
+  // Offline direct /settings reload serves the precached app shell as settings.
+  const settingsOfflinePage = await browser.newPage();
+  try {
+    await settingsOfflinePage.setOfflineMode(true);
+    await settingsOfflinePage.goto(`${origin}/settings`, { waitUntil: "networkidle0" });
+    await settingsOfflinePage.waitForSelector(".settings-page", { timeout: 30000 });
+    const offlineSettingsCopy = await settingsOfflinePage.evaluate(() => document.querySelector(".settings-page")?.textContent ?? "");
+    assert.ok(offlineSettingsCopy.includes("Einstellungen") || offlineSettingsCopy.includes("Settings"), "offline /settings reload must render settings");
+  } finally {
+    await settingsOfflinePage.close().catch(() => {});
+  }
   await page.setOfflineMode(false);
   await page.setCacheEnabled(true);
 
@@ -397,9 +418,14 @@ try {
   // --- Working guard: large import warning disables the mounted update action ---
   const bigFixture = join(ARTIFACTS, "pwa-big.json");
   await writeFile(bigFixture, JSON.stringify([{ EventID: "pwa-big", Items: Array(31000).fill(0) }]));
-  // Settings stay open so the real update action is mounted during the import.
+  // Start the import from the workspace, then open settings while the
+  // warning is pending to exercise the mounted update guard.
+  await page.click(".settings-back");
+  await page.waitForSelector("input[type=file]:not(:disabled)");
   await (await page.$("input[type=file]")).uploadFile(bigFixture);
   await page.waitForSelector(".import-warning", { timeout: 30000 });
+  await page.evaluate(() => document.querySelector('button[title="Einstellungen"]')?.click());
+  await page.waitForSelector(".settings-page");
   const guardDisabled = await page.evaluate(() => {
     const btn = [...document.querySelectorAll(".settings-page button")].find((b) => (b.textContent ?? "").includes("Aktualisieren") || (b.textContent ?? "").includes("Update"));
     return btn ? btn.disabled : "missing";
@@ -432,6 +458,9 @@ try {
         ?.click();
     }),
   ]);
+  await page.waitForSelector(".settings-page", { timeout: 30000 });
+  assert.match(new URL(page.url()).pathname, /^\/settings\/?$/, "explicit update retains the settings route");
+  await closeSettings(page);
   await page.waitForSelector(".source-button", { timeout: 30000 });
   // The app starts without a selected source; reselect the persisted import.
   await page.click(".source-button");
@@ -554,11 +583,8 @@ try {
     toggle?.click();
   });
   await page.setViewport({ width: 390, height: 844, isMobile: true });
-  if (!(await page.evaluate(() => document.querySelector(".settings-page") !== null))) {
-    await page.waitForSelector('button[title="Einstellungen"], button[title="Settings"]', { timeout: 30000 });
-    await openSettings(page);
-  }
-  await page.waitForSelector(".settings-page", { timeout: 10000 });
+  // Changing mobile emulation may reload the page; /settings is retained.
+  await page.waitForSelector(".settings-page", { timeout: 30000 });
   const overflowMobile = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
   assert.equal(overflowMobile, true, "mobile settings must not overflow horizontally");
   await page.screenshot({ path: join(ARTIFACTS, "settings-mobile.png"), fullPage: true });

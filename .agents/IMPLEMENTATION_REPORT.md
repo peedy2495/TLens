@@ -4,34 +4,27 @@ SUCCESS
 
 # Implemented
 
-- All plan tasks: canonical path-based logo geometry (35-unit viewBox, bar drawn before D, shared y=26 baseline, rounded right end only), workspace brand-mark, favicon, generator, all 4 PNGs, preview artifact.
-
-# Changed Files
-
-- public/favicon.svg (canonical geometry; bar-before-D, no host-font text)
-- src/components/App.tsx (brand-mark block only: inline SVG with identical path data)
-- src/styles.css (brand-mark block only: SVG host, removed text/span bar rules)
-- scripts/generate-pwa-icons.mjs (reads public/favicon.svg, no duplicated text glyph)
-- public/icons/dlens-192.png, dlens-512.png, dlens-maskable-512.png, apple-touch-icon.png (regenerated)
-- .dlens-logo-preview.png (new preview artifact: reference vs new icon, junction 2x zoom, 35px actual + 4x)
-- .agents/IMPLEMENTATION_REPORT.md, .agents/PLAN.md (status marks only)
+- Settings now uses /settings (including /settings/) while retaining the existing 180ms animations, reduced-motion support and focus behavior.
+- Stable workspace root preserves in-memory state during navigation. Browser Back/Forward works and reload retains settings, including offline and PWA updates.
+- UI back and Escape use an entry-specific history marker; direct visits close to the app root. Consumed Escape, composition and open child overlays are guarded.
+- Static settings page reuses the index app shell. Preview serving, service-worker precache/fallback and hosting headers support the route.
+- Added a durable settings browser regression and updated existing browser checks for animated unmounting and persistent settings after reload.
 
 # Verification
 
-- node scripts/generate-pwa-icons.mjs: passed.
-- Reproducibility (sha256sum -c after re-run): passed, all 4 OK.
-- Dimensions/alpha via sharp metadata: passed (192 RGBA, 512 RGBA, maskable 512 RGB opaque, apple 180 RGB opaque).
-- Path-data equality favicon.svg vs App.tsx inline SVG: passed (both d strings identical).
-- Visual inspection of actual raster (.dlens-logo-preview.png via image read): passed — D 44%x49% matches reference 43%x49%; bar height 3, shared baseline, seamless white-to-pale join in 2x zoom, no blue notch; 35px render legible.
+- Production build with Node 22 and DLENS_VITE_CACHE override: passed.
+- Executor vitest run: 19 files, 164 tests passed.
+- scripts/check-settings-browser.mjs against final production preview: passed (history, reload, direct visits, Escape, reduced motion, workspace state).
+- npm run test:pwa: passed (including offline settings and update reload).
+- npm run test:browser: passed (imports, OPFS, connectors, deletion, URL reload and local file-input reload).
 - git diff --check: passed.
-- npx astro check: passed (0 errors, 0 warnings, 6 hints).
-- Self-review against baseline and acceptance criteria: passed.
-- Not run: full test suite / browser smoke (out of scope per plan; localhost server untouched, no processes killed).
 
-# Plan Deviations
+# Follow-up Corrections
 
-- none
+- Codex replaced the executor's tab-wide settings flag and timer with a history-entry marker, and shared the Astro page shell.
+- Resolved reported browser-test blockers by waiting for animated workspace mounting and closing persisted settings before workspace assertions.
+- The file-input browser suite explicitly disables showOpenFilePicker: Puppeteer chooser interception does not support the native File System Access picker. Native picker behavior was not changed.
 
 # Blockers
 
-- none
+- None.

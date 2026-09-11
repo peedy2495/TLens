@@ -4,6 +4,8 @@ import {
   createRoute,
   createRouter,
   RouterProvider,
+  useRouter,
+  useRouterState,
 } from "@tanstack/react-router";
 import { JazzReactProvider, useAccount } from "jazz-tools/react";
 import { Dialog } from "@base-ui/react/dialog";
@@ -204,17 +206,45 @@ function WorkspaceApp() {
     readStored("dlens-views", []),
   );
   const [panel, setPanel] = useState("");
-  const [settings, setSettings] = useState(false);
-  const [settingsView, setSettingsView] = useState(false);
+  // Settings live at a real /settings route while rendering in the same
+  // page area with the existing 180ms animation. The root component stays
+  // mounted across navigation so storage/workspace state is preserved.
+  const router = useRouter();
+  const routePath = useRouterState({ select: (state) => state.location.pathname });
+  const settings = routePath === "/settings" || routePath === "/settings/";
+  const settingsClosePending = useRef(false);
+  useEffect(() => { settingsClosePending.current = false; }, [routePath]);
+  function openSettings() {
+    if (router.state.location.pathname.replace(/\/$/, "") === "/settings") return;
+    void router.navigate({
+      to: "/settings",
+      state: (previous) => ({ ...previous, dlensSettingsParent: true }),
+    });
+  }
+  function closeSettings() {
+    if (router.state.location.pathname.replace(/\/$/, "") !== "/settings" || settingsClosePending.current) return;
+    settingsClosePending.current = true;
+    // The marker belongs to this history entry, survives reload/Forward,
+    // and cannot leak into a later direct visit as a tab-wide flag could.
+    const state = router.state.location.state as { dlensSettingsParent?: boolean };
+    if (state.dlensSettingsParent) router.history.back();
+    else void router.navigate({ to: "/", replace: true });
+  }
+  const [settingsView, setSettingsView] = useState(settings);
   const [settingsLeaving, setSettingsLeaving] = useState(false);
   const [settingsAnimated, setSettingsAnimated] = useState(false);
   const settingsMounted = useRef(false);
   useEffect(() => {
     // Same-page settings: move focus to the back control on open and return
-    // it to the settings trigger on close. Skipped on first render so page
-    // load never steals focus. Runs on the rendered view so focus only
-    // returns after the closing animation has unmounted settings.
-    if (!settingsMounted.current) { settingsMounted.current = true; return; }
+    // it to the settings trigger on close. On first render only a direct
+    // /settings load takes focus; a root load never steals focus. Runs on
+    // the rendered view so focus only returns after the closing animation
+    // has unmounted settings.
+    if (!settingsMounted.current) {
+      settingsMounted.current = true;
+      if (settingsView) settingsBack.current?.focus();
+      return;
+    }
     if (settingsView) settingsBack.current?.focus();
     else settingsTrigger.current?.focus();
   }, [settingsView]);
@@ -356,11 +386,25 @@ function WorkspaceApp() {
         event.preventDefault();
         searchInput.current?.focus();
       }
-      if (event.key === "Escape") setPanel("");
+      if (event.key !== "Escape") return;
+      // Child overlays consume Escape first; never dismiss settings then.
+      if (event.defaultPrevented) return;
+      if (event.isComposing) return;
+      if (importWarning !== null) return;
+      if (detail !== null) return;
+      if (urlHelpOpen) return;
+      if (settings) {
+        event.preventDefault();
+        closeSettings();
+        return;
+      }
+      setPanel("");
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+    // closeSettings reads live router state via the stable router instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, importWarning, detail, urlHelpOpen]);
   const selectedDataset = files.find((file) => file.id === source);
   const legacyTables: Table[] = (() => {
     if (source !== "jazz" || !me.$isLoaded) return [];
@@ -835,7 +879,7 @@ function WorkspaceApp() {
               ref={settingsBack}
               type="button"
               className="settings-back"
-              onClick={() => setSettings(false)}
+              onClick={() => closeSettings()}
               aria-label={t("Zurück zum Workspace", "Back to workspace")}
             >
               <ArrowLeftIcon />
@@ -1112,7 +1156,7 @@ function WorkspaceApp() {
             <IconButton
               label={t("Einstellungen", "Settings")}
               buttonRef={settingsTrigger}
-              onClick={() => setSettings(true)}
+              onClick={() => openSettings()}
             >
               <Cog6ToothIcon />
             </IconButton>
@@ -2124,7 +2168,9 @@ function WorkspaceApp() {
 }
 const rootRoute = createRootRoute({ component: WorkspaceApp });
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/" });
-const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]) });
+const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings" });
+const settingsSlashRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings/" });
+const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute, settingsRoute, settingsSlashRoute]) });
 export default function App() {
   return (
     <JazzReactProvider AccountSchema={DLensAccount} sync={{ when: "never" }}>

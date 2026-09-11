@@ -48,6 +48,11 @@ const browser = await puppeteer.launch({
 });
 try {
   const page = await browser.newPage();
+  // This suite exercises the file-input fallback. Puppeteer's file chooser
+  // interception cannot accept the native File System Access picker.
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(window, "showOpenFilePicker", { value: undefined, configurable: true });
+  });
   page.on("console", (m) => {
     if (m.type() === "error") console.error("CONSOLE:", m.text());
   });
@@ -129,6 +134,7 @@ try {
   await page.waitForSelector('.settings-group input[type=url]');
   await page.type('.settings-group input[type=url]', endpoint.replace(/\/records.*$/, ""));
   await page.click(".settings-back");
+  await page.waitForSelector(".source-button");
   await page.click(".source-button");
   await page.select(".sources select", await page.$eval(".sources select option:nth-child(2)", el => el.value));
   await page.type(".sources input[type=password]", "browser-test-token-00000000000000");
@@ -180,13 +186,15 @@ try {
   page.once("dialog", (dialog) => dialog.accept());
   await clickText("Alle importierten Daten löschen");
   await page.waitForFunction(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled);
-  await page.waitForFunction(() => !document.querySelector("input[type=file]").disabled);
-  // Reset must remain available even when no datasets are visible.
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen").disabled), false);
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled === false);
+  // Reset remains available in settings even with no visible datasets.
   page.once("dialog", (dialog) => dialog.accept());
   await clickText("Alle importierten Daten löschen");
-  await page.waitForFunction(() => !document.querySelector("input[type=file]").disabled);
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled);
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Alle importierten Daten löschen")?.disabled === false);
   await page.reload();
+  await page.waitForSelector(".settings-back");
+  await page.click(".settings-back");
   await page.waitForSelector("input[type=file]:not(:disabled)");
   await page.click(".source-button");
   assert.equal(await page.$$eval(".sources button", (buttons) => buttons.filter((b) => /browser-|Datenbank ·/.test(b.textContent)).length), 0);

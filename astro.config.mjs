@@ -59,13 +59,14 @@ export default defineConfig({
       workbox: {
         globPatterns: [
           "index.html",
+          "settings/index.html",
           "_astro/**/*.{js,css,wasm,woff,woff2}",
           "favicon.svg",
           "icons/*.png",
         ],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         navigateFallback: "/",
-        navigateFallbackAllowlist: [/^\/(\?.*)?$/],
+        navigateFallbackAllowlist: [/^\/(\?.*)?$/, /^\/settings\/?(\?.*)?$/],
         cleanupOutdatedCaches: true,
         skipWaiting: false,
         clientsClaim: false,
