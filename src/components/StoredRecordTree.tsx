@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import type { StorageClient } from "../lib/storage/client";
 import type { ChildPage } from "../lib/ingestion/contracts";
+import {
+  recordExistsFilter,
+  recordScalarFilter,
+  type Filter,
+} from "../lib/data";
+import {
+  RecordFilterMenu,
+  menuPositionForRect,
+  openRecordMenuAt,
+  type RecordMenu,
+} from "./RecordFilterMenu";
 
 export function StoredRecordTree({
   client,
@@ -8,12 +19,14 @@ export function StoredRecordTree({
   record,
   path = [],
   language,
+  onAddFilter,
 }: {
   client: StorageClient;
   dataset: string;
   record: number;
-  path?: string[];
+  path?: (string | number)[];
   language: "de" | "en";
+  onAddFilter?: (filter: Filter) => void;
 }) {
   const [page, setPage] = useState<ChildPage | null>(null);
   const [offset, setOffset] = useState(0);
@@ -24,7 +37,13 @@ export function StoredRecordTree({
     setPage(null);
     setError("");
     client
-      .request<ChildPage>({ type: "children", dataset, record, path, offset })
+      .request<ChildPage>({
+        type: "children",
+        dataset,
+        record,
+        path: path.map(String),
+        offset,
+      })
       .then((value) => {
         if (!cancelled) setPage(value);
       })
@@ -52,8 +71,10 @@ export function StoredRecordTree({
             client={client}
             dataset={dataset}
             record={record}
-            path={[...path, entry.key]}
+            parentPath={path}
+            parentKind={page.kind === "value" ? "object" : page.kind}
             language={language}
+            onAddFilter={onAddFilter}
           />
         ))}
       </dl>
@@ -83,33 +104,139 @@ function StoredBranch(props: {
   client: StorageClient;
   dataset: string;
   record: number;
-  path: string[];
+  parentPath: (string | number)[];
+  parentKind: "object" | "array";
   language: "de" | "en";
+  onAddFilter?: (filter: Filter) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const { entry, ...tree } = props;
+  const [menu, setMenu] = useState<RecordMenu>(null);
+  const { entry, parentPath, parentKind, onAddFilter, language } = props;
+  const segment: string | number =
+    parentKind === "array" ? Number(entry.key) : entry.key;
+  const fullPath = [...parentPath, segment];
+  const openMenu = (
+    clientPoint: { clientX: number; clientY: number },
+    filter: Filter,
+  ) => {
+    if (!onAddFilter) return;
+    setPending(filter);
+    setMenu(openRecordMenuAt(clientPoint, filter.column));
+  };
+  const [pending, setPending] = useState<Filter | null>(null);
+  const pick = () => {
+    const filter = pending;
+    setMenu(null);
+    setPending(null);
+    if (filter && onAddFilter) onAddFilter(filter);
+  };
   if (entry.kind === "value")
     return (
-      <div>
+      <div
+        tabIndex={onAddFilter ? 0 : undefined}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openMenu(event, recordScalarFilter(fullPath, entry.value ?? null));
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key === "ContextMenu" ||
+            (event.shiftKey && event.key === "F10")
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            const rect = (
+              event.currentTarget as HTMLElement
+            ).getBoundingClientRect();
+            openMenu(
+              menuPositionForRect(rect),
+              recordScalarFilter(fullPath, entry.value ?? null),
+            );
+          }
+          if (event.key === "Escape" && menu) {
+            event.preventDefault();
+            event.stopPropagation();
+            setMenu(null);
+          }
+        }}
+      >
         <dt>{entry.key}</dt>
         <dd>
           <span className="record-value">{String(entry.value ?? "null")}</span>
         </dd>
+        {menu && (
+          <RecordFilterMenu
+            menu={menu}
+            language={language}
+            onClose={() => setMenu(null)}
+            onPick={pick}
+          />
+        )}
       </div>
     );
+  const { entry: _entry, ...tree } = props as unknown as {
+    entry: unknown;
+  } & Record<string, unknown>;
+  void _entry;
+  void tree;
   return (
-    <div>
+    <div
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(event, recordExistsFilter(fullPath));
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.key === "ContextMenu" ||
+          (event.shiftKey && event.key === "F10")
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = (
+            event.currentTarget as HTMLElement
+          ).getBoundingClientRect();
+          openMenu(menuPositionForRect(rect), recordExistsFilter(fullPath));
+        }
+      }}
+    >
       <dt>
         <details
           open={open}
-          onToggle={(event) => setOpen(event.currentTarget.open)}
+          onToggle={(event) => {
+            event.stopPropagation();
+            setOpen(event.currentTarget.open);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openMenu(event, recordExistsFilter(fullPath));
+          }}
         >
           <summary>
             {entry.key} <span>({entry.count})</span>
           </summary>
-          {open && <StoredRecordTree {...tree} />}
+          {open && (
+            <StoredRecordTree
+              client={props.client}
+              dataset={props.dataset}
+              record={props.record}
+              path={fullPath}
+              language={props.language}
+              onAddFilter={props.onAddFilter}
+            />
+          )}
         </details>
       </dt>
+      {menu && (
+        <RecordFilterMenu
+          menu={menu}
+          language={language}
+          onClose={() => setMenu(null)}
+          onPick={pick}
+        />
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   createRootRoute,
   createRoute,
@@ -40,13 +41,16 @@ import {
   TrashIcon,
   XMarkIcon,
   ArrowsUpDownIcon,
+  WindowIcon,
 } from "@heroicons/react/24/outline";
 import { exportCsv, defaultCsvOptions, type CsvOptions } from "../lib/csv";
 import {
+  describeFilter,
   eventFilter,
   matchingFilterColumns,
   matchingFilterValues,
   reconcileFilterColumn,
+  sameFilter,
   valueText,
   type Row,
   eventRange,
@@ -294,6 +298,149 @@ function WorkspaceApp() {
   useEffect(() => {
     localStorage.setItem("dlens-show-timeline", JSON.stringify(showTimeline));
   }, [showTimeline]);
+  const [timelineDetached, setTimelineDetached] = useState<boolean>(() =>
+    readStored("dlens-timeline-detached", false),
+  );
+  const [timelinePortalEl, setTimelinePortalEl] = useState<HTMLElement | null>(null);
+  const [timelineBlocked, setTimelineBlocked] = useState(false);
+  const timelineWindow = useRef<Window | null>(null);
+  const parentUnloading = useRef(false);
+  useEffect(() => {
+    try {
+      localStorage.setItem("dlens-timeline-detached", JSON.stringify(timelineDetached));
+    } catch { /* Keep intent in memory when storage is unavailable. */ }
+  }, [timelineDetached]);
+  function copyTimelineStyles(target: Window) {
+    try {
+      const head = target.document.head;
+      head.querySelectorAll("[data-dlens-timeline]").forEach((node) => node.remove());
+      document.querySelectorAll("style, link[rel=\"stylesheet\"]").forEach((node) => {
+        try {
+          const clone = node.cloneNode(true) as HTMLElement;
+          clone.setAttribute("data-dlens-timeline", "1");
+          head.appendChild(clone);
+        } catch { /* Skip unreadable style nodes. */ }
+      });
+      const fonts = document.querySelector('link[rel="preload"][as="font"]');
+      if (fonts) {
+        const clone = fonts.cloneNode(true) as HTMLElement;
+        clone.setAttribute("data-dlens-timeline", "1");
+        head.appendChild(clone);
+      }
+    } catch { /* Child keeps default styling when copying fails. */ }
+    try {
+      target.document.documentElement.lang = language;
+      target.document.documentElement.dataset.theme = dark ? "dark" : "light";
+      target.document.title = language === "de" ? "DLens – Zeitstrahl" : "DLens – Timeline";
+    } catch { /* Ignore child metadata failures. */ }
+  }
+  function attachTimelineWindow(target: Window) {
+    timelineWindow.current = target;
+    setTimelineBlocked(false);
+    try {
+      target.document.body.style.margin = "0";
+      target.document.body.style.background = "var(--bg, #f7f9fc)";
+      let host = target.document.getElementById("dlens-timeline-host");
+      if (!host) {
+        host = target.document.createElement("div");
+        host.id = "dlens-timeline-host";
+        host.style.padding = "16px";
+        target.document.body.appendChild(host);
+      }
+      copyTimelineStyles(target);
+      setTimelinePortalEl(host);
+    } catch {
+      setTimelinePortalEl(null);
+    }
+  }
+  function detachTimeline() {
+    if (timelineWindow.current && !timelineWindow.current.closed && timelinePortalEl) return;
+    let target: Window | null = null;
+    try {
+      target = window.open("", "dlens-timeline-window", "popup=yes,width=980,height=740");
+    } catch {
+      target = null;
+    }
+    if (!target) {
+      setTimelineDetached(true);
+      setTimelineBlocked(true);
+      setNotice(t("Popup wurde blockiert. Der Zeitstrahl bleibt hier sichtbar.", "Popup was blocked. The timeline stays visible here."));
+      return;
+    }
+    try {
+      if (target.closed) throw new Error("blocked");
+    } catch {
+      setTimelineDetached(true);
+      setTimelineBlocked(true);
+      return;
+    }
+    setTimelineDetached(true);
+    attachTimelineWindow(target);
+  }
+  function dockTimeline(clearIntent = true) {
+    const target = timelineWindow.current;
+    timelineWindow.current = null;
+    setTimelinePortalEl(null);
+    try {
+      target?.close();
+    } catch { /* Ignore child close failures. */ }
+    if (clearIntent) {
+      setTimelineDetached(false);
+      setTimelineBlocked(false);
+    }
+  }
+  useEffect(() => {
+    const onUnload = () => {
+      parentUnloading.current = true;
+      try {
+        timelineWindow.current?.close();
+      } catch { /* Never block unload on child cleanup. */ }
+      timelineWindow.current = null;
+    };
+    window.addEventListener("pagehide", onUnload);
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.removeEventListener("pagehide", onUnload);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, []);
+  useEffect(() => {
+    // A deliberately closed child returns inline and clears the split
+    // preference; a parent unload keeps the preference and only cleans up.
+    const id = setInterval(() => {
+      const target = timelineWindow.current;
+      if (!target) return;
+      let closed = false;
+      try {
+        closed = target.closed;
+      } catch {
+        closed = true;
+      }
+      if (!closed) return;
+      timelineWindow.current = null;
+      setTimelinePortalEl(null);
+      if (!parentUnloading.current) {
+        setTimelineDetached(false);
+        setTimelineBlocked(false);
+      }
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    if (timelineWindow.current && !timelineWindow.current.closed) {
+      copyTimelineStyles(timelineWindow.current);
+    }
+    // Keep child styles/theme/language in sync with the parent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dark, language]);
+  function addRecordFilter(filter: Filter) {
+    setFilters((previous) => {
+      if (previous.some((entry) => sameFilter(entry, filter))) return previous;
+      if (filter.operator === "exact" || filter.operator === "exists") return [...previous, filter];
+      return [...previous, filter];
+    });
+    setDetail(null);
+  }
   const [colorColumn, setColorColumn] = useState<string>(() =>
     readStored("dlens-color-column", "Area"),
   );
@@ -847,6 +994,238 @@ function WorkspaceApp() {
       setNotice(error instanceof Error ? error.message : String(error));
     }
   }
+  const timelineDetachedActive = Boolean(
+    timelineDetached && timelinePortalEl && !(timelineWindow.current?.closed ?? true),
+  );
+  const detachLabel = timelineDetachedActive
+    ? t("Zeitstrahl einbetten", "Dock timeline")
+    : t("Zeitstrahl in separatem Fenster öffnen", "Open timeline in separate window");
+  const timelineRestoreVisible = Boolean(timelineDetached && !timelineDetachedActive);
+  const timelineContent = showTimeline ? (
+    <>
+        <section className="timeline-card">
+          <div className="section-heading">
+            <div>
+              <span className="section-icon">
+                <ClockIcon />
+              </span>
+              <h2>{t("Zeitstrahl", "Timeline")}</h2>
+              <span className="subtle">{selectedDataset ? result?.dayCount ?? 0 : dayRows.length} Events</span>
+            </div>
+            <span className="timeline-header-actions">
+              <span className="timeline-hint">
+                {t("Dein Tag auf einen Blick", "Your day at a glance")}
+              </span>
+              <button
+                type="button"
+                className="icon-button"
+                title={detachLabel}
+                aria-label={detachLabel}
+                onClick={() => {
+                  if (timelineDetachedActive) dockTimeline();
+                  else detachTimeline();
+                }}
+              >
+                <WindowIcon />
+              </button>
+            </span>
+          </div>
+          <div className="date-navigation">
+            <strong>{dateLabel(day)}</strong>
+            {day === localDate(now) && (
+              <span className="today">{t("Heute", "Today")}</span>
+            )}
+            <div className="date-actions">
+              <IconButton
+                label={t("Vorheriger Tag", "Previous day")}
+                onClick={() =>
+                  setSelectedDate(
+                    dates[Math.max(0, dates.indexOf(day) - 1)] ?? "",
+                  )
+                }
+              >
+                <ChevronLeftIcon />
+              </IconButton>
+              <IconButton
+                label={t("Nächster Tag", "Next day")}
+                onClick={() =>
+                  setSelectedDate(
+                    dates[Math.min(dates.length - 1, dates.indexOf(day) + 1)] ??
+                      "",
+                  )
+                }
+              >
+                <ChevronRightIcon />
+              </IconButton>
+              <button
+                onClick={() => toggle("calendar")}
+                aria-label={t("Datum wählen", "Choose date")}
+              >
+                <CalendarDaysIcon />
+              </button>
+            </div>
+          </div>
+          {panel === "calendar" && (
+            <div className="calendar-panel">
+              <label>
+                {t("Datum wählen", "Choose date")}
+                <input
+                  type="date"
+                  value={day}
+                  onChange={(e) => {
+                    if (dates.includes(e.target.value)) {
+                      setSelectedDate(e.target.value);
+                      setPanel("");
+                    } else
+                      setNotice(
+                        t(
+                          "An diesem Tag gibt es keine Treffer.",
+                          "No matches on this day.",
+                        ),
+                      );
+                  }}
+                />
+              </label>
+              <div>
+                {dates.map((date) => (
+                  <button
+                    key={date}
+                    className={date === day ? "active" : ""}
+                    onClick={() => {
+                      setSelectedDate(date);
+                      setPanel("");
+                    }}
+                  >
+                    {dateLabel(date)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {dayRows.length ? (
+            <div className="timeline">
+              <div className="tick-grid">
+                {Array.from(
+                  { length: Math.floor((end - start) / 60) + 1 },
+                  (_, i) => {
+                    const minute = start + i * 60;
+                    return (
+                      <div
+                        key={minute}
+                        style={{ left: `${position(minute)}%` }}
+                      >
+                        <span>
+                          {String(Math.floor(minute / 60) % 24).padStart(
+                            2,
+                            "0",
+                          )}
+                          :00
+                        </span>
+                      </div>
+                    );
+                  },
+                )}
+              </div>
+              <div className="event-lanes">
+                {dayRows.map((row, index) => {
+                  const range = rangeForRow(row);
+                  return (
+                    <div className="event-lane" key={index}>
+                      <button
+                        title={`${row.EventID} · ${row[timeColumns.start]}–${row[timeColumns.end]} · ${colorColumn}: ${valueText(row[colorColumn]) || "—"}`}
+                        className="event-bar colored-event"
+                        style={{
+                          ...colorStyle(valueText(row[colorColumn])),
+                          left: `${position(range.start)}%`,
+                          width: `${position(range.end) - position(range.start)}%`,
+                        }}
+                        onClick={() => {
+                          if (row.EventID != null)
+                            setFilters(
+                              eventFilter(filters, String(row.EventID)),
+                            );
+                        }}
+                      >
+                        <span>{String(row.EventID ?? "Event")}</span>
+                        <small>
+                          {String(row[timeColumns.start])} – {String(row[timeColumns.end])}
+                        </small>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {day === localDate(now) && clock >= start && clock <= end && (
+                <div
+                  className="now-marker"
+                  style={{ left: `${position(clock)}%` }}
+                >
+                  <span />
+                  <small>{t("Jetzt", "Now")}</small>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="timeline-empty">
+              {t(
+                !timeColumns.start || !timeColumns.end
+                  ? "Bitte Start- und Endzeit-Felder in den Einstellungen auswählen."
+                  : "Keine Events mit Datum und Uhrzeit in dieser Auswahl.",
+                !timeColumns.start || !timeColumns.end
+                  ? "Please select start and end time fields in Settings."
+                  : "No events with date and time in this selection.",
+              )}
+            </div>
+          )}
+          <div className="timeline-footer">
+            <div>
+              {(selectedDataset ? result?.legend ?? [] : [...new Set(dayRows.map((row) => valueText(row[colorColumn])))].sort()).map((value) => (
+                <span className="legend" key={value} style={{ color: colorStyle(value).color }}>
+                  <i style={{ background: "currentColor" }} />
+                  {colorColumn}: {value || t("Ohne Wert", "No value")}
+                </span>
+              ))}
+            </div>
+            <span>
+              {t(
+                "Zeitraum automatisch · Volle Stunden",
+                "Automatic range · Whole hours",
+              )}
+            </span>
+          </div>
+        </section>
+        {selectedDataset && (result?.dayCount ?? 0) > 100 && <div className="data-pagination">
+          <button disabled={!timelinePage} onClick={() => setTimelinePage((p) => p - 1)}>←</button>
+          {t("Zeitstrahl-Seite", "Timeline page")} {timelinePage + 1}
+          <button disabled={(timelinePage + 1) * 100 >= (result?.dayCount ?? 0)} onClick={() => setTimelinePage((p) => p + 1)}>→</button>
+        </div>}
+    </>
+  ) : null;
+  const timelineInline = timelineDetachedActive ? (
+    <section className="timeline-card timeline-placeholder" aria-label={t("Zeitstrahl", "Timeline")}>
+      <div className="section-heading">
+        <div>
+          <span className="section-icon">
+            <ClockIcon />
+          </span>
+          <h2>{t("Zeitstrahl", "Timeline")}</h2>
+        </div>
+        <span className="timeline-header-actions">
+          <button type="button" onClick={() => dockTimeline()}>
+            {t("Zeitstrahl einbetten", "Dock timeline")}
+          </button>
+        </span>
+      </div>
+      <p className="subtle">
+        {t(
+          "Der Zeitstrahl ist in einem separaten Fenster geöffnet. Filter, Datum und Quelle bleiben synchron.",
+          "The timeline is open in a separate window. Filters, date and source stay in sync.",
+        )}
+      </p>
+    </section>
+  ) : (
+    timelineContent
+  );
   const count = selectedDataset?.count ?? tables.reduce((sum, table) => sum + table.rows.length, 0);
   return (
     <div className="app-shell">
@@ -1602,9 +1981,7 @@ function WorkspaceApp() {
                     setFilters(filters.filter((_, i) => i !== index))
                   }
                 >
-                  {f.column}
-                  {f.operator === "equals" ? " = " : ": "}{" "}
-                  <strong>{f.value}</strong>
+                  {describeFilter(f, language).path} <strong>{describeFilter(f, language).detail}</strong>
                   <XMarkIcon />
                 </button>
               ))
@@ -1652,189 +2029,27 @@ function WorkspaceApp() {
             <button onClick={pwa.deferUpdate}>{t("Später", "Later")}</button>
           </div>
         )}
-        {showTimeline && <section className="timeline-card">
-          <div className="section-heading">
-            <div>
-              <span className="section-icon">
-                <ClockIcon />
-              </span>
-              <h2>{t("Zeitstrahl", "Timeline")}</h2>
-              <span className="subtle">{selectedDataset ? result?.dayCount ?? 0 : dayRows.length} Events</span>
-            </div>
-            <span className="timeline-hint">
-              {t("Dein Tag auf einen Blick", "Your day at a glance")}
-            </span>
-          </div>
-          <div className="date-navigation">
-            <strong>{dateLabel(day)}</strong>
-            {day === localDate(now) && (
-              <span className="today">{t("Heute", "Today")}</span>
-            )}
-            <div className="date-actions">
-              <IconButton
-                label={t("Vorheriger Tag", "Previous day")}
-                onClick={() =>
-                  setSelectedDate(
-                    dates[Math.max(0, dates.indexOf(day) - 1)] ?? "",
-                  )
-                }
-              >
-                <ChevronLeftIcon />
-              </IconButton>
-              <IconButton
-                label={t("Nächster Tag", "Next day")}
-                onClick={() =>
-                  setSelectedDate(
-                    dates[Math.min(dates.length - 1, dates.indexOf(day) + 1)] ??
-                      "",
-                  )
-                }
-              >
-                <ChevronRightIcon />
-              </IconButton>
-              <button
-                onClick={() => toggle("calendar")}
-                aria-label={t("Datum wählen", "Choose date")}
-              >
-                <CalendarDaysIcon />
-              </button>
-            </div>
-          </div>
-          {panel === "calendar" && (
-            <div className="calendar-panel">
-              <label>
-                {t("Datum wählen", "Choose date")}
-                <input
-                  type="date"
-                  value={day}
-                  onChange={(e) => {
-                    if (dates.includes(e.target.value)) {
-                      setSelectedDate(e.target.value);
-                      setPanel("");
-                    } else
-                      setNotice(
-                        t(
-                          "An diesem Tag gibt es keine Treffer.",
-                          "No matches on this day.",
-                        ),
-                      );
-                  }}
-                />
-              </label>
-              <div>
-                {dates.map((date) => (
-                  <button
-                    key={date}
-                    className={date === day ? "active" : ""}
-                    onClick={() => {
-                      setSelectedDate(date);
-                      setPanel("");
-                    }}
-                  >
-                    {dateLabel(date)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {dayRows.length ? (
-            <div className="timeline">
-              <div className="tick-grid">
-                {Array.from(
-                  { length: Math.floor((end - start) / 60) + 1 },
-                  (_, i) => {
-                    const minute = start + i * 60;
-                    return (
-                      <div
-                        key={minute}
-                        style={{ left: `${position(minute)}%` }}
-                      >
-                        <span>
-                          {String(Math.floor(minute / 60) % 24).padStart(
-                            2,
-                            "0",
-                          )}
-                          :00
-                        </span>
-                      </div>
-                    );
-                  },
-                )}
-              </div>
-              <div className="event-lanes">
-                {dayRows.map((row, index) => {
-                  const range = rangeForRow(row);
-                  return (
-                    <div className="event-lane" key={index}>
-                      <button
-                        title={`${row.EventID} · ${row[timeColumns.start]}–${row[timeColumns.end]} · ${colorColumn}: ${valueText(row[colorColumn]) || "—"}`}
-                        className="event-bar colored-event"
-                        style={{
-                          ...colorStyle(valueText(row[colorColumn])),
-                          left: `${position(range.start)}%`,
-                          width: `${position(range.end) - position(range.start)}%`,
-                        }}
-                        onClick={() => {
-                          if (row.EventID != null)
-                            setFilters(
-                              eventFilter(filters, String(row.EventID)),
-                            );
-                        }}
-                      >
-                        <span>{String(row.EventID ?? "Event")}</span>
-                        <small>
-                          {String(row[timeColumns.start])} – {String(row[timeColumns.end])}
-                        </small>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-              {day === localDate(now) && clock >= start && clock <= end && (
-                <div
-                  className="now-marker"
-                  style={{ left: `${position(clock)}%` }}
-                >
-                  <span />
-                  <small>{t("Jetzt", "Now")}</small>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="timeline-empty">
-              {t(
-                !timeColumns.start || !timeColumns.end
-                  ? "Bitte Start- und Endzeit-Felder in den Einstellungen auswählen."
-                  : "Keine Events mit Datum und Uhrzeit in dieser Auswahl.",
-                !timeColumns.start || !timeColumns.end
-                  ? "Please select start and end time fields in Settings."
-                  : "No events with date and time in this selection.",
-              )}
-            </div>
-          )}
-          <div className="timeline-footer">
-            <div>
-              {(selectedDataset ? result?.legend ?? [] : [...new Set(dayRows.map((row) => valueText(row[colorColumn])))].sort()).map((value) => (
-                <span className="legend" key={value} style={{ color: colorStyle(value).color }}>
-                  <i style={{ background: "currentColor" }} />
-                  {colorColumn}: {value || t("Ohne Wert", "No value")}
-                </span>
-              ))}
-            </div>
+        {timelineRestoreVisible && (
+          <div className="timeline-restore" role="status">
             <span>
               {t(
-                "Zeitraum automatisch · Volle Stunden",
-                "Automatic range · Whole hours",
+                "Der Zeitstrahl sollte in einem separaten Fenster geöffnet sein. Falls der Browser das Popup blockiert hat, öffne es hier erneut.",
+                "The timeline should be open in a separate window. If the browser blocked the popup, reopen it here.",
               )}
             </span>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => detachTimeline()}
+            >
+              {t("Zeitstrahl erneut lösen", "Reopen timeline window")}
+            </button>
+            <button type="button" onClick={() => dockTimeline()}>
+              {t("Zeitstrahl einbetten", "Dock timeline")}
+            </button>
           </div>
-        </section>
-        }
-        {selectedDataset && (result?.dayCount ?? 0) > 100 && showTimeline && <div className="data-pagination">
-          <button disabled={!timelinePage} onClick={() => setTimelinePage((p) => p - 1)}>←</button>
-          {t("Zeitstrahl-Seite", "Timeline page")} {timelinePage + 1}
-          <button disabled={(timelinePage + 1) * 100 >= (result?.dayCount ?? 0)} onClick={() => setTimelinePage((p) => p + 1)}>→</button>
-        </div>}
+        )}
+        {timelineInline}
         <div className="results-heading">
           <div>
             <Squares2X2Icon />
@@ -2155,10 +2370,16 @@ function WorkspaceApp() {
             </div>
             <Dialog.Description>{detail?.path.join(" › ")}</Dialog.Description>
             {detail?.dataset && detail.record !== undefined && <button disabled={working} onClick={() => void deleteImported("record")}>{t("Datensatz löschen", "Delete record")}</button>}
-            {detail && (detail.dataset && detail.record !== undefined && storage.current ? <StoredRecordTree client={storage.current} dataset={detail.dataset} record={detail.record} language={language} /> : <RecordTree value={detail.row} />)}
+            {detail && (detail.dataset && detail.record !== undefined && storage.current ? <StoredRecordTree client={storage.current} dataset={detail.dataset} record={detail.record} language={language} onAddFilter={addRecordFilter} /> : <RecordTree value={detail.row} language={language} onAddFilter={addRecordFilter} />)}
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
+      {timelineDetachedActive && timelinePortalEl
+        ? createPortal(
+            <div className="timeline-detached">{timelineContent}</div>,
+            timelinePortalEl,
+          )
+        : null}
       {notice && (
         <div className="toast" role="status">
           {notice}

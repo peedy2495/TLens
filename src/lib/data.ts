@@ -23,8 +23,14 @@ export function defaultColumns(tables: Table[]): string[] {
 export type Filter = {
   column: string;
   value: string;
-  operator?: "contains" | "equals";
+  operator?: "contains" | "equals" | "exact" | "exists";
+  path?: (string | number)[];
+  valueJson?: string;
 };
+export type PathSegment = string | number;
+export function normalizePath(path: (string | number)[] | undefined): (string | number)[] {
+  return Array.isArray(path) ? [...path] : [];
+}
 export function valueText(value: JsonValue | undefined): string {
   return value != null && typeof value === "object"
     ? JSON.stringify(value)
@@ -68,6 +74,106 @@ export function filterOptions(tables: Table[], column: string): string[] {
   ].sort((a, b) =>
     b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }),
   );
+}
+export function valueAtPath(
+  row: JsonValue,
+  path: (string | number)[],
+): { found: boolean; value?: JsonValue } {
+  let current: JsonValue = row;
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      const index =
+        typeof segment === "number"
+          ? segment
+          : /^(0|[1-9]\d*)$/.test(String(segment))
+            ? Number(segment)
+            : NaN;
+      if (!Number.isInteger(index) || index < 0 || index >= current.length)
+        return { found: false };
+      current = current[index];
+      continue;
+    }
+    if (current !== null && typeof current === "object") {
+      const key = String(segment);
+      if (!Object.hasOwn(current, key)) return { found: false };
+      current = (current as Record<string, JsonValue>)[key];
+      continue;
+    }
+    return { found: false };
+  }
+  return { found: true, value: current };
+}
+export function pathExists(row: JsonValue, path: (string | number)[]): boolean {
+  return valueAtPath(row, path).found;
+}
+function sameScalar(a: JsonValue, b: JsonValue): boolean {
+  if (a === null || b === null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a === "object" || typeof b === "object")
+    return JSON.stringify(a) === JSON.stringify(b);
+  return Object.is(a, b) || a === b;
+}
+export function exactDisplay(value: JsonValue): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return value === "" ? '""' : value;
+  return String(value);
+}
+export function pathLabel(path: (string | number)[]): string {
+  let label = "";
+  path.forEach((segment, index) => {
+    if (typeof segment === "number" || /^(0|[1-9]\d*)$/.test(String(segment))) {
+      label += `[${segment}]`;
+      return;
+    }
+    label += index === 0 ? String(segment) : ` › ${segment}`;
+  });
+  return label;
+}
+export function recordScalarFilter(
+  path: (string | number)[],
+  value: JsonValue,
+): Filter {
+  const leaf = path.at(-1);
+  return {
+    column: leaf === undefined ? "" : String(leaf),
+    value: exactDisplay(value),
+    operator: "exact",
+    path: [...path],
+    valueJson: JSON.stringify(value),
+  };
+}
+export function recordExistsFilter(path: (string | number)[]): Filter {
+  const leaf = path.at(-1);
+  return {
+    column: leaf === undefined ? "" : String(leaf),
+    value: "",
+    operator: "exists",
+    path: [...path],
+  };
+}
+export function sameFilter(a: Filter, b: Filter): boolean {
+  return (
+    a.column === b.column &&
+    a.value === b.value &&
+    (a.operator ?? "contains") === (b.operator ?? "contains") &&
+    (a.valueJson ?? "") === (b.valueJson ?? "") &&
+    JSON.stringify(a.path ?? null) === JSON.stringify(b.path ?? null)
+  );
+}
+export function describeFilter(
+  filter: Filter,
+  language: "de" | "en",
+): { path: string; detail: string } {
+  if ((filter.operator === "exact" || filter.operator === "exists") && filter.path?.length) {
+    const path = pathLabel(filter.path);
+    if (filter.operator === "exists")
+      return { path, detail: language === "de" ? "vorhanden" : "exists" };
+    return { path, detail: `= ${filter.value}` };
+  }
+  return {
+    path: filter.column,
+    detail: `${filter.operator === "equals" ? "=" : ":"} ${filter.value}`,
+  };
 }
 export function eventFilter(filters: Filter[], id: string): Filter[] {
   return [
@@ -146,15 +252,29 @@ export function filterTables(
           Object.values(row).some((value) =>
             valueText(value).toLowerCase().includes(query.toLowerCase()),
           ) &&
-          filters.every((f) =>
-            valuesForColumn(row, f.column).some((value) =>
-              f.operator === "equals"
+          filters.every((f) => {
+            if (f.operator === "exists" && f.path?.length)
+              return pathExists(row, f.path);
+            if (f.operator === "exact" && f.path?.length) {
+              const at = valueAtPath(row, f.path);
+              if (!at.found) return false;
+              if (f.valueJson !== undefined) {
+                try {
+                  return sameScalar(at.value as JsonValue, JSON.parse(f.valueJson));
+                } catch {
+                  return valueText(at.value) === f.value;
+                }
+              }
+              return valueText(at.value) === f.value;
+            }
+            return valuesForColumn(row, f.column).some((value) =>
+              f.operator === "equals" || f.operator === "exact"
                 ? valueText(value) === f.value
                 : valueText(value)
                     .toLowerCase()
                     .includes(f.value.toLowerCase()),
-            ),
-          ),
+            );
+          }),
       ),
     }))
     .filter((table) => table.rows.length);
