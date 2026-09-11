@@ -166,6 +166,9 @@ self.onmessage = async ({
       case "query":
         result = repo.query(request.query);
         break;
+      case "structure":
+        result = repo.structure(request.dataset);
+        break;
       case "import": {
         const estimate = await navigator.storage.estimate();
         if (

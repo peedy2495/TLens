@@ -13,9 +13,11 @@ import { Dialog } from "@base-ui/react/dialog";
 import {
   ArrowUpIcon,
   ArrowDownIcon,
+  ArrowDownOnSquareStackIcon,
   ArrowDownTrayIcon,
   ArrowLeftIcon,
   ArrowPathIcon,
+  ArrowUpOnSquareStackIcon,
   BookmarkIcon,
   CalendarDaysIcon,
   CheckIcon,
@@ -67,6 +69,7 @@ import {
 } from "../lib/data";
 import { StoredRecordTree } from "./StoredRecordTree";
 import { RecordTree } from "./RecordTree";
+import { buildFieldTree, entriesForTables, type FieldStructureEntry } from "../lib/field-tree";
 import { PwaSettings } from "./PwaSettings";
 import { usePwa } from "../lib/pwa";
 import { applyTheme, persistThemeChoice, readThemePreference, resolveTheme, systemPrefersDark } from "../lib/theme";
@@ -133,6 +136,63 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+function ColumnBranch({
+  node,
+  depth,
+  columns,
+  collapsedBranches,
+  onToggleBranch,
+  onToggleColumn,
+}: {
+  node: import("../lib/field-tree").FieldTreeNode;
+  depth: number;
+  columns: string[];
+  collapsedBranches: string[];
+  onToggleBranch: (key: string) => void;
+  onToggleColumn: (column: string) => void;
+}) {
+  const expanded = !collapsedBranches.includes(node.key);
+  return (
+    <div className="column-branch" role="group" aria-label={node.segment}>
+      <button
+        type="button"
+        className="column-branch-toggle"
+        aria-expanded={expanded}
+        onClick={() => onToggleBranch(node.key)}
+        style={{ ["--branch-depth" as string]: depth }}
+      >
+        <ChevronDownIcon className={expanded ? "" : "rotated"} />
+        <span>{node.segment}</span>
+        <span className="column-branch-count">{node.fields.length}</span>
+      </button>
+      <div className={`column-branch-body${expanded ? " open" : ""}`} inert={!expanded}>
+        <div className="column-branch-fields">
+          {node.fields.map((field) => (
+            <label key={field}>
+              <input
+                type="checkbox"
+                checked={columns.includes(field)}
+                onChange={() => onToggleColumn(field)}
+              />
+              {field}
+            </label>
+          ))}
+          {node.children.map((child) => (
+            <ColumnBranch
+              key={child.key}
+              node={child}
+              depth={depth + 1}
+              columns={columns}
+              collapsedBranches={collapsedBranches}
+              onToggleBranch={onToggleBranch}
+              onToggleColumn={onToggleColumn}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 function WorkspaceApp() {
@@ -210,6 +270,9 @@ function WorkspaceApp() {
     readStored("dlens-views", []),
   );
   const [panel, setPanel] = useState("");
+  const [columnTree, setColumnTree] = useState(false);
+  const [collapsedBranches, setCollapsedBranches] = useState<string[]>([]);
+  const [fieldStructure, setFieldStructure] = useState<FieldStructureEntry[] | null>(null);
   // Settings live at a real /settings route while rendering in the same
   // page area with the existing 180ms animation. The root component stays
   // mounted across navigation so storage/workspace state is preserved.
@@ -582,6 +645,43 @@ function WorkspaceApp() {
   const availableFilterValues = selectedDataset ? freshResult?.values ?? [] : matchingFilterValues(tables, query, filters, filterColumn, filterValue);
   const filterPending = Boolean(selectedDataset && !resultFresh);
   const displayedFilterValues = availableFilterValues;
+  const structureKey = selectedDataset ? `${selectedDataset.id}|${selectedDataset.generation}` : `jazz|${source === "jazz" ? legacyTables.length : ""}`;
+  const structureEntries: FieldStructureEntry[] = selectedDataset
+    ? (fieldStructure ?? selectedDataset.columns.map((name) => ({ path: [], fields: [name] })))
+    : entriesForTables(legacyTables);
+  const fieldTree = buildFieldTree(structureEntries);
+  const flatFieldTree = fieldTree.length === 1 && fieldTree[0].key === "";
+  function toggleColumn(column: string) {
+    setColumns(columns.includes(column) ? columns.filter((c) => c !== column) : [...columns, column]);
+  }
+  function toggleBranch(key: string) {
+    setCollapsedBranches(collapsedBranches.includes(key) ? collapsedBranches.filter((k) => k !== key) : [...collapsedBranches, key]);
+  }
+  useEffect(() => {
+    // Source-wide hierarchy, independent of filters/pagination. The request
+    // key guards against stale responses after source/generation changes.
+    if (!selectedDataset || !storage.current) {
+      setFieldStructure(null);
+      setCollapsedBranches([]);
+      return;
+    }
+    const accepted = structureKey;
+    let cancelled = false;
+    setFieldStructure(null);
+    setCollapsedBranches([]);
+    storage.current
+      .request<FieldStructureEntry[]>({ type: "structure", dataset: selectedDataset.id })
+      .then((entries) => {
+        if (!cancelled && accepted === `${selectedDataset.id}|${selectedDataset.generation}`) setFieldStructure(entries);
+      })
+      .catch(() => {
+        if (!cancelled) setFieldStructure(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureKey]);
   useEffect(() => {
     const client = new StorageClient(); storage.current = client;
     client.request<Dataset[]>({ type: "list" }).then((datasets) => { setFiles(datasets); setStorageReady(true); }).catch((error) => setStorageError(String(error)));
@@ -1057,12 +1157,12 @@ function WorkspaceApp() {
               >
                 <ChevronRightIcon />
               </IconButton>
-              <button
+              <IconButton
+                label={t("Datum wählen", "Choose date")}
                 onClick={() => toggle("calendar")}
-                aria-label={t("Datum wählen", "Choose date")}
               >
                 <CalendarDaysIcon />
-              </button>
+              </IconButton>
             </div>
           </div>
           {panel === "calendar" && (
@@ -1859,23 +1959,62 @@ function WorkspaceApp() {
           )}
           {panel === "columns" && (
             <div className="inline-panel column-options">
-              <span>{t("Sichtbare Felder", "Visible fields")}</span>
-              {allColumns.map((column) => (
-                <label key={column}>
-                  <input
-                    type="checkbox"
-                    checked={columns.includes(column)}
-                    onChange={() =>
-                      setColumns(
-                        columns.includes(column)
-                          ? columns.filter((c) => c !== column)
-                          : [...columns, column],
-                      )
-                    }
-                  />
-                  {column}
-                </label>
-              ))}
+              <span className="column-options-heading">
+                <span>{t("Sichtbare Felder", "Visible fields")}</span>
+                <IconButton
+                  label={
+                    columnTree
+                      ? t("Flache Ansicht", "Flat view")
+                      : t("Baumansicht", "Tree view")
+                  }
+                  onClick={() => setColumnTree(!columnTree)}
+                >
+                  {columnTree ? <ArrowUpOnSquareStackIcon /> : <ArrowDownOnSquareStackIcon />}
+                </IconButton>
+              </span>
+              {!columnTree ? (
+                <div className="column-flat column-view" key="flat">
+                  {allColumns.map((column) => (
+                    <label key={column}>
+                      <input
+                        type="checkbox"
+                        checked={columns.includes(column)}
+                        onChange={() => toggleColumn(column)}
+                      />
+                      {column}
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <div className="column-tree column-view" key="tree" role="tree" aria-label={t("Sichtbare Felder als Baum", "Visible fields as tree")}>
+                  {flatFieldTree ? (
+                    <div className="column-flat" key="flat-fallback">
+                      {allColumns.map((column) => (
+                        <label key={column}>
+                          <input
+                            type="checkbox"
+                            checked={columns.includes(column)}
+                            onChange={() => toggleColumn(column)}
+                          />
+                          {column}
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    fieldTree.map((node) => (
+                      <ColumnBranch
+                        key={node.key || node.segment}
+                        node={node}
+                        depth={0}
+                        columns={columns}
+                        collapsedBranches={collapsedBranches}
+                        onToggleBranch={toggleBranch}
+                        onToggleColumn={toggleColumn}
+                      />
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           )}
           {panel === "views" && (

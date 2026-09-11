@@ -128,6 +128,10 @@ export interface ChildPage {
     count: number;
   }[];
 }
+export interface FieldStructureEntry {
+  path: string[];
+  fields: string[];
+}
 export type Request =
   | { type: "list" }
   | { type: "import"; file: File; csv: CsvOptions; replace?: string; language?: "de" | "en"; source?: Dataset["source"]; displayName?: string }
@@ -143,6 +147,7 @@ export type Request =
       offset: number;
     }
   | { type: "query"; query: Query }
+  | { type: "structure"; dataset: string }
   | {
       type: "export";
       query: Query;

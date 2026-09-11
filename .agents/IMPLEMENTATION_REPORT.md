@@ -4,25 +4,22 @@ SUCCESS
 
 # Implemented
 
-- Record trees (in-memory and storage-backed) offer right-click / Shift+F10 / ContextMenu-key "Als Filter hinzufügen" / "Add as filter" on every scalar and container, with Escape closing only the menu and viewport-clamped dismissal.
-- Scalar filters apply as path-scoped typed exact matches (null, "", false, 0 distinguished); containers apply as path existence filters; dotted/slashed keys and array indices addressed by explicit segments; duplicates rejected; chips show path plus value/existence; detail closes on apply.
-- Timeline detaches via header WindowIcon into a popup window (portal, copied styles/theme/language/title, full controls incl. pagination), stays synchronized, returns inline on child close; settings navigation cannot strand it; single storage owner kept.
-- Split intent persists in localStorage; child close clears it while app reload/close retains it with a localized restore action; blocked popups keep a usable inline chart with feedback.
-- Documented filter/split/popup behavior in README; added path-filter unit tests; verified with unit suite, production build, storage/settings browser checks, and a focused new-feature browser pass.
+- Localized date-picker tooltip via existing IconButton in timeline date navigation (covers detached timeline).
+- Flat/tree toggle for Anzeige visible fields using ArrowDownOnSquareStackIcon / ArrowUpOnSquareStackIcon, flat by default.
+- Source-wide field hierarchy with collapsible branches and shared name-based selection; legacy Jazz tables derived locally.
+- New `structure` storage request backed by a bounded path/name-only query, refreshed on source/generation changes with stale-response guard.
+- Animated branch expansion/mode switch with reduced-motion, keyboard and theme-safe styling.
 
 # Changed Files
 
-- src/lib/data.ts, src/components/App.tsx, src/components/RecordTree.tsx, src/components/StoredRecordTree.tsx, src/styles.css, README.md, .agents/PLAN.md (marked Completed)
-- src/components/RecordFilterMenu.tsx, src/lib/record-filter.test.ts
+- src/components/App.tsx, src/styles.css, src/lib/field-tree.ts, src/lib/storage/repository.ts, src/lib/storage/worker.ts, src/lib/ingestion/contracts.ts
+- src/lib/field-tree.test.ts, src/lib/storage/field-structure.test.ts, scripts/check-columns-browser.mjs
 
 # Verification
 
-- `npx vitest run` — passed (20 files, 168 tests).
-- `npm run build` (Node 22, DLENS_VITE_CACHE override) — passed.
-- `node scripts/check-storage-browser.mjs` vs production preview — passed.
-- `node scripts/check-settings-browser.mjs` vs production preview — passed.
-- Focused production browser pass (nested fixture: scalar/exists context filters, chips, row filtering, menu Escape, detach/sync/child-close/reload-restore) — passed.
-- `git diff --check` — passed.
+- `npx vitest run src/lib/field-tree.test.ts src/lib/storage/field-structure.test.ts src/lib/storage/filter-options.test.ts src/lib/data.test.ts` — passed (25 tests).
+- `node scripts/check-columns-browser.mjs` (against dev server) — passed.
+- `npx astro check` — passed (0 errors); `npm run build` — passed; `git diff --check` — passed.
 - Self-review — passed.
 
 # Plan Deviations

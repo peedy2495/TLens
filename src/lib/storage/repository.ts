@@ -546,6 +546,43 @@ export class Repository {
       statement.finalize();
     }
   }
+  structure(dataset: string): { path: string[]; fields: string[] }[] {
+    // Source-wide field layout independent of search/filter/pagination.
+    // Only path/name pairs are read; no record values leave the database.
+    const generation = this.dataset(dataset).generation;
+    const paths = this.db
+      .selectValues("SELECT DISTINCT path FROM records WHERE generation=? ORDER BY path LIMIT 1001", [generation])
+      .map(String);
+    if (paths.length > 1000) throw new Error("Dataset exceeds 1,000 distinct paths.");
+    const statement = this.db.prepare(
+      "SELECT DISTINCT r.path,f.name FROM fields f JOIN records r ON r.generation=f.generation AND r.id=f.record WHERE f.generation=? AND f.top=1",
+    );
+    const fieldsByPath = new Map<string, Set<string>>();
+    try {
+      statement.bind([generation]);
+      let combos = 0;
+      while (statement.step()) {
+        const path = String(statement.get(0));
+        const name = String(statement.get(1));
+        let names = fieldsByPath.get(path);
+        if (!names) {
+          names = new Set();
+          fieldsByPath.set(path, names);
+        }
+        if (!names.has(name)) {
+          names.add(name);
+          combos++;
+          if (combos > 25000) throw new Error("Field layout exceeds budget. Narrow the source.");
+        }
+      }
+    } finally {
+      statement.finalize();
+    }
+    return paths.map((raw) => ({
+      path: JSON.parse(raw) as string[],
+      fields: [...(fieldsByPath.get(raw) ?? [])].sort(),
+    }));
+  }
   query(q: Query): QueryResult {
     const dataset = this.dataset(q.dataset),
       where = this.where(q);
