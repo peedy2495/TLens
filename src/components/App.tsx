@@ -213,16 +213,19 @@ function WorkspaceApp() {
   const routePath = useRouterState({ select: (state) => state.location.pathname });
   const settings = routePath === "/settings" || routePath === "/settings/";
   const settingsClosePending = useRef(false);
+  const restoreSettingsFocus = useRef(true);
   useEffect(() => { settingsClosePending.current = false; }, [routePath]);
   function openSettings() {
     if (router.state.location.pathname.replace(/\/$/, "") === "/settings") return;
+    restoreSettingsFocus.current = true;
     void router.navigate({
       to: "/settings",
       state: (previous) => ({ ...previous, dlensSettingsParent: true }),
     });
   }
-  function closeSettings() {
+  function closeSettings(restoreFocus = true) {
     if (router.state.location.pathname.replace(/\/$/, "") !== "/settings" || settingsClosePending.current) return;
+    restoreSettingsFocus.current = restoreFocus;
     settingsClosePending.current = true;
     // The marker belongs to this history entry, survives reload/Forward,
     // and cannot leak into a later direct visit as a tab-wide flag could.
@@ -246,7 +249,11 @@ function WorkspaceApp() {
       return;
     }
     if (settingsView) settingsBack.current?.focus();
-    else settingsTrigger.current?.focus();
+    else {
+      // Escape returns to the workspace without highlighting the gear.
+      if (restoreSettingsFocus.current) settingsTrigger.current?.focus();
+      restoreSettingsFocus.current = true;
+    }
   }, [settingsView]);
   useEffect(() => {
     // Keep settings mounted for a 180ms ease-in exit animation before
@@ -395,7 +402,7 @@ function WorkspaceApp() {
       if (urlHelpOpen) return;
       if (settings) {
         event.preventDefault();
-        closeSettings();
+        closeSettings(false);
         return;
       }
       setPanel("");

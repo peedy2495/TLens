@@ -98,6 +98,8 @@ try {
   await page.waitForSelector(".settings-page", { hidden: true, timeout: 10000 });
   assert.equal(new URL(page.url()).pathname, "/");
 
+  assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('button[title="Einstellungen"]')), false, "Escape must not focus the gear");
+
   // Escape consumed by a child overlay must not dismiss settings.
   await page.evaluate(() => document.querySelector('button[title="Einstellungen"]')?.click());
   await page.waitForSelector(".settings-page", { timeout: 10000 });
